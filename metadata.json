@@ -1,0 +1,9 @@
+{
+  "name": "SMS Ledger",
+  "description": "An offline-first SMS transaction parsing engine with categorizations and accounts visual dashboard.",
+  "requestFramePermissions": [
+    "android.permission.RECEIVE_SMS",
+    "android.permission.READ_SMS"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
