@@ -19,6 +19,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Path
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -46,6 +50,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -1110,7 +1115,7 @@ fun MerchantCardView(merchant: MerchantAgg) {
 }
 
 // ==========================================
-// SCREEN 3: ADVANCED MONTHLY TRENDS SCREEN (image_4.png)
+// SCREEN 3: ADVANCED MONTHLY TRENDS SCREEN (image_4.png replica)
 // ==========================================
 @Composable
 fun AdvancedTrendsScreen(
@@ -1119,198 +1124,404 @@ fun AdvancedTrendsScreen(
     totalIncome: Double
 ) {
     val monthlyTrendList = remember(transactions) { getMonthlyTrendData(transactions) }
+    
+    // Default selected month to the latest one (usually the far-right index 35)
+    var selectedMonthLabel by remember(monthlyTrendList) {
+        mutableStateOf(monthlyTrendList.lastOrNull()?.monthLabel ?: "")
+    }
+
+    // Dynamic filtering based on selection
+    val selectedMonthTransactions = remember(transactions, selectedMonthLabel) {
+        transactions.filter { tx ->
+            val txCal = Calendar.getInstance().apply { timeInMillis = tx.timestamp }
+            val m = SimpleDateFormat("MMM", Locale.US).format(txCal.time)
+            val y = SimpleDateFormat("yy", Locale.US).format(txCal.time)
+            "$m'$y" == selectedMonthLabel
+        }
+    }
+
+    // Dynamic metrics calculated for the selected month
+    val selectedSpends = remember(selectedMonthTransactions) {
+        selectedMonthTransactions.filter { it.type != "Credit" }.sumOf { it.amount }
+    }
+    val selectedIncome = remember(selectedMonthTransactions) {
+        selectedMonthTransactions.filter { it.type == "Credit" }.sumOf { it.amount }
+    }
+
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp)
     ) {
-        // Top Header
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp)
-        ) {
-            Text(
-                text = "Advanced Trends",
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                color = PureWhiteText
-            )
-            Text(
-                text = "Dual-axis tracking of 6 months performance",
-                style = MaterialTheme.typography.bodySmall,
-                color = MutedGreyText
-            )
-        }
-
-        // Custom hand-drawn line + bar dual chart representation
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(230.dp),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-            border = BorderStroke(1.dp, BorderOutline)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(14.dp)
-            ) {
-                // Legend
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Historical Snapshot",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = PureWhiteText,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    // Color indicators
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(MintLimePrimary, CircleShape)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Income (Line)", style = MaterialTheme.typography.labelSmall, color = MutedGreyText)
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(Color(0xFFB39DDB), RoundedCornerShape(2.dp))
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Spends (Bar)", style = MaterialTheme.typography.labelSmall, color = MutedGreyText)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Canvas viewport drawing both series
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                ) {
-                    if (monthlyTrendList.isNotEmpty()) {
-                        DualAxisChartView(trends = monthlyTrendList)
-                    } else {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("No data to plot. Use 'Seed Sample' parameters.", color = MutedGreyText)
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Screen Split: Capsule date indicator
-        val calendarMonthText = remember {
-            SimpleDateFormat("MMM'yy", Locale.US).format(Date())
-        }
-        
+        // 1. Top Header Row (Back button, Title, Filter icon)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(LightCharcoalSurface)
-                .border(1.dp, BorderOutline, RoundedCornerShape(8.dp))
-                .padding(vertical = 10.dp, horizontal = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = "Highlighted Focus Cycle",
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = PureWhiteText
-            )
-            Box(
-                modifier = Modifier
-                    .background(BorderOutline, RoundedCornerShape(4.dp))
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = {
+                        Toast.makeText(context, "Navigating back...", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        tint = PureWhiteText
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
                 Text(
-                    text = calendarMonthText,
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black),
-                    color = MintLimePrimary
+                    text = "Trends by month ▾",
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 19.sp
+                    ),
+                    color = PureWhiteText,
+                    modifier = Modifier.clickable {
+                        Toast.makeText(context, "Trends filter dropdown clicked", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+            IconButton(
+                onClick = {
+                    Toast.makeText(context, "Filter menu clicked", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.size(24.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.FilterList,
+                    contentDescription = "Filter",
+                    tint = PureWhiteText
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Metrics Grid below chart: 2 large dark cards side-by-side
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        // 2. The Custom Interactive Scrollable Dual-Axis Chart Area
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(262.dp)
         ) {
-            // Spends metric element
-            Card(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(95.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                border = BorderStroke(1.dp, BorderOutline)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "CURRENT SPENDS",
-                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                            color = MutedGreyText,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Icon(
-                            imageVector = Icons.Default.CallMade,
-                            contentDescription = "Spends",
-                            tint = Color(0xFFFF5252),
-                            modifier = Modifier.size(12.dp)
+            val density = LocalDensity.current
+            val viewportWidthPx = constraints.maxWidth.toFloat() - with(density) { 48.dp.toPx() }
+            val scrollState = rememberScrollState()
+
+            val columnWidth = 65.dp
+            val chartHeight = 180.dp
+
+            val columnWidthPx = with(density) { columnWidth.toPx() }
+
+            // Dynamic safeLimitVal based on shown months in current scroll screen
+            val safeLimitVal by remember(monthlyTrendList, scrollState.value, viewportWidthPx, columnWidthPx) {
+                derivedStateOf {
+                    val startScroll = scrollState.value.toFloat()
+                    val endScroll = startScroll + viewportWidthPx
+
+                    val visible = monthlyTrendList.filterIndexed { index: Int, _: com.example.MonthlyTrendData ->
+                        val colStart = index * columnWidthPx
+                        val colEnd = (index + 1) * columnWidthPx
+                        colEnd >= startScroll && colStart <= endScroll
+                    }
+
+                    val maxAmount = if (visible.isEmpty()) 1.0 else {
+                        maxOf(
+                            visible.maxOfOrNull { it.expenses } ?: 1.0,
+                            visible.maxOfOrNull { it.income } ?: 1.0,
+                            1.0
                         )
                     }
-                    Text(
-                        text = String.format(Locale.getDefault(), "₹%,.0f", totalExpenses),
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
-                        color = PureWhiteText
-                    )
+                    val limitVal = maxAmount * 1.15
+                    if (limitVal <= 0.0) 1.0 else limitVal
                 }
             }
 
-            // Income metric element
-            Card(
+            // Helper format for Indian currency numbering with safe US Locale: e.g. 1.72L or 86.2K
+            fun formatYAxisValue(value: Double): String {
+                return when {
+                    value >= 100000.0 -> String.format(Locale.US, "%.1fL", value / 100000.0)
+                    value >= 1000.0 -> String.format(Locale.US, "%.1fK", value / 1000.0)
+                    else -> String.format(Locale.US, "%.0f", value)
+                }
+            }
+
+            // Fixed Y-Axis gridlines & labels drawn in the background
+            Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .height(95.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                border = BorderStroke(1.dp, BorderOutline)
+                    .fillMaxSize()
+                    .padding(bottom = 24.dp, top = 8.dp),
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
+                listOf(1.0, 0.75, 0.5, 0.25, 0.0).forEach { ratio ->
+                    val yLabel = formatYAxisValue(safeLimitVal * ratio)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Axis Label
+                        Text(
+                            text = yLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = MutedGreyText,
+                            modifier = Modifier.width(46.dp),
+                            maxLines = 1
+                        )
+                        // Grid Line
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(1.dp)
+                                .background(BorderOutline.copy(alpha = 0.25f))
+                        )
+                    }
+                }
+            }
+
+            // Proactively Scroll to the latest month (current month at far-right index 35)
+            LaunchedEffect(monthlyTrendList) {
+                scrollState.scrollTo(scrollState.maxValue)
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 48.dp) // shift precisely right of Y-axis label column
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(scrollState)
+                ) {
+                    val totalWidth = columnWidth * monthlyTrendList.size
+
+                    // Bottom elements inside the scroll container
+                    Column(modifier = Modifier.width(totalWidth)) {
+                        // Custom drawing canvas
+                        Canvas(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(chartHeight)
+                        ) {
+                            val columnWidthPx = columnWidth.toPx()
+                            val canvasHeight = size.height
+
+                            // Draw Expenses Rounded Bars (subtle Blue)
+                            monthlyTrendList.forEachIndexed { i, d ->
+                                val cx = (i * columnWidthPx) + (columnWidthPx / 2)
+                                val barHeight = canvasHeight * (d.expenses / safeLimitVal).toFloat()
+                                val barTop = canvasHeight - barHeight
+                                val barWidthPx = 16.dp.toPx()
+
+                                drawRoundRect(
+                                    color = Color(0xFF536DFE), // Beautiful vivid blue
+                                    topLeft = Offset(cx - (barWidthPx / 2), barTop),
+                                    size = Size(barWidthPx, barHeight),
+                                    cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
+                                )
+                            }
+
+                            // Draw Income connected line series (Vibrant green path)
+                            val linePoints = monthlyTrendList.mapIndexed { idx, d ->
+                                val cx = (idx * columnWidthPx) + (columnWidthPx / 2)
+                                val cy = canvasHeight - (canvasHeight * (d.income / safeLimitVal)).toFloat()
+                                Offset(cx, cy)
+                            }
+
+                            if (linePoints.size > 1) {
+                                val path = Path().apply {
+                                    moveTo(linePoints[0].x, linePoints[0].y)
+                                    for (p in 1 until linePoints.size) {
+                                        lineTo(linePoints[p].x, linePoints[p].y)
+                                    }
+                                }
+                                drawPath(
+                                    path = path,
+                                    color = MintLimePrimary,
+                                    style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+                                )
+                            }
+
+                            // Draw selection highlights and line dots
+                            monthlyTrendList.forEachIndexed { i, d ->
+                                val cx = (i * columnWidthPx) + (columnWidthPx / 2)
+                                val cy = canvasHeight - (canvasHeight * (d.income / safeLimitVal)).toFloat()
+
+                                // If this label matches the selected one, draw a vertical highlight
+                                if (d.monthLabel == selectedMonthLabel) {
+                                    drawRoundRect(
+                                        color = Color.White.copy(alpha = 0.08f),
+                                        topLeft = Offset(i * columnWidthPx, 0f),
+                                        size = Size(columnWidthPx, canvasHeight + 20.dp.toPx()),
+                                        cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                                    )
+                                }
+
+                                // Neon Circle Mark for Income nodes
+                                drawCircle(
+                                    color = MintLimePrimary,
+                                    radius = 6.dp.toPx(),
+                                    center = Offset(cx, cy)
+                                )
+                                // Inner white dot outline
+                                drawCircle(
+                                    color = Color.White,
+                                    radius = 2.dp.toPx(),
+                                    center = Offset(cx, cy)
+                                )
+                            }
+                        }
+
+                        // Bottom labels row
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(22.dp)
+                        ) {
+                            monthlyTrendList.forEachIndexed { idx, d ->
+                                val cleanLabel = if (idx == 0) "6" else d.monthLabel
+                                Box(
+                                    modifier = Modifier
+                                        .width(columnWidth)
+                                        .fillMaxHeight(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val isSelected = d.monthLabel == selectedMonthLabel
+                                    Text(
+                                        text = cleanLabel,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        ),
+                                        color = if (isSelected) MintLimePrimary else MutedGreyText
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Click detection Overlay on columns
+                    Row(modifier = Modifier.width(totalWidth)) {
+                        monthlyTrendList.forEach { d ->
+                            Box(
+                                modifier = Modifier
+                                    .width(columnWidth)
+                                    .fillMaxHeight()
+                                    .clickable {
+                                        selectedMonthLabel = d.monthLabel
+                                    }
+                            )
+                        }
+                    }
+                }
+
+                // 3. Scrollbar Scroll slider indicator below the scroll area
+                Spacer(modifier = Modifier.height(10.dp))
+                val scrollMax = scrollState.maxValue.coerceAtLeast(1)
+                val ratio = scrollState.value.toFloat() / scrollMax
+                Box(
+                    modifier = Modifier
+                        .width(130.dp)
+                        .height(3.dp)
+                        .background(Color.White.copy(alpha = 0.12f), RoundedCornerShape(2.dp))
+                        .align(Alignment.CenterHorizontally)
+                ) {
+                    val handleWidth = 24.dp
+                    Box(
+                        modifier = Modifier
+                            .offset(x = (130.dp - handleWidth) * ratio)
+                            .width(handleWidth)
+                            .height(3.dp)
+                            .background(Color.White.copy(alpha = 0.7f), RoundedCornerShape(1.5.dp))
+                    )
+                }
+            }
+        }
+
+        // 3. Month Header Display and Dropdown Select
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 22.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = selectedMonthLabel,
+                style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 24.sp
+                ),
+                color = PureWhiteText
+            )
+            Box(
+                modifier = Modifier
+                    .background(LightCharcoalSurface, RoundedCornerShape(24.dp))
+                    .border(1.dp, BorderOutline.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
+                    .clickable {
+                        Toast.makeText(context, "Account filters click. Toggle display standard sets.", Toast.LENGTH_SHORT).show()
+                    }
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "All accounts",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = PureWhiteText
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = "Dropdown",
+                        tint = MutedGreyText,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
+        // 4. Custom Metrics Section: Big concentric spends on left + stacked on right
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(184.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Main Concentric circle Spends card on left
+            Box(
+                modifier = Modifier
+                    .weight(1.15f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xFF262C40)) // gorgeous deep blue-grey container
+                    .border(1.dp, Color(0xFF333D66), RoundedCornerShape(24.dp))
+            ) {
+                // Background Concentric Rings (matching screenshot)
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val cx = size.width / 2f
+                    val cy = size.height * 0.7f
+                    val radii = listOf(35.dp.toPx(), 65.dp.toPx(), 95.dp.toPx(), 125.dp.toPx(), 155.dp.toPx())
+                    radii.forEach { r ->
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.045f),
+                            radius = r,
+                            center = Offset(cx, cy),
+                            style = Stroke(width = 1.2.dp.toPx())
+                        )
+                    }
+                }
+
+                // Main card values
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(12.dp),
+                        .padding(16.dp),
                     verticalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(
@@ -1318,185 +1529,168 @@ fun AdvancedTrendsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "CURRENT INCOME",
-                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                            color = MintLimePrimary,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .background(Color(0xFF536DFE), CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Spends",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MutedGreyText
+                            )
+                        }
                         Icon(
-                            imageVector = Icons.Default.TrendingUp,
-                            contentDescription = "Income",
-                            tint = Color(0xFF66BB6A),
-                            modifier = Modifier.size(12.dp)
+                            imageVector = Icons.Default.ArrowOutward,
+                            contentDescription = "Trend up-right arrow",
+                            tint = MutedGreyText,
+                            modifier = Modifier.size(16.dp)
                         )
                     }
-                    Text(
-                        text = String.format(Locale.getDefault(), "₹%,.0f", totalIncome),
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
-                        color = MintLimePrimary
-                    )
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                    ) {
+                        Text(
+                            text = String.format(Locale.getDefault(), "₹ %,.2f", selectedSpends),
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Black,
+                                fontSize = 21.sp
+                            ),
+                            color = PureWhiteText
+                        )
+                    }
+                }
+            }
+
+            // Right Stack of two smaller cards (Income top, Budget bottom)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Income Green Card
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xFF1B3D28)) // Rich forest emerald
+                        .border(1.dp, Color(0xFF2E633C).copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+                        .padding(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(MintLimePrimary, CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "Income",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                    color = MintLimePrimary
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = String.format(Locale.getDefault(), "₹ %,.0f", selectedIncome),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                                color = MintLimePrimary
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.VisibilityOff,
+                            contentDescription = "Hidden balance toggle icon",
+                            tint = MintLimePrimary,
+                            modifier = Modifier.size(16.dp).clickable {
+                                Toast.makeText(context, "Balance hidden/shown", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                }
+
+                // Set Monthly Budget Card
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(LightCharcoalSurface)
+                        .border(1.dp, BorderOutline.copy(alpha = 0.3f), RoundedCornerShape(18.dp))
+                        .clickable {
+                            Toast.makeText(context, "Set monthly budget target flow initialized", Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.08f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AccountBalanceWallet,
+                                contentDescription = "Budget Icon",
+                                tint = Color(0xFF9EA7FC),
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                        Text(
+                            text = "Set monthly\nbudget",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                lineHeight = 14.sp
+                            ),
+                            color = PureWhiteText
+                        )
+                    }
                 }
             }
         }
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Prominent mint-accented Base Button at screen bottom
-        val context = LocalContext.current
-        val reviewBtnText = remember {
-            val formatFull = SimpleDateFormat("MMMM yyyy", Locale.US).format(Date())
-            "Review $formatFull"
-        }
+        // 5. Dynamic Prominent Action Button at the extremely bottom
         Button(
             onClick = {
-                Toast.makeText(context, "$reviewBtnText: Month is within acceptable targets!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Review $selectedMonthLabel is standard and fully aligned!", Toast.LENGTH_SHORT).show()
             },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 16.dp)
-                .height(52.dp),
+                .height(48.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MintLimePrimary,
                 contentColor = DarkGreenOnPrimary
             ),
-            shape = RoundedCornerShape(14.dp)
+            shape = RoundedCornerShape(24.dp)
         ) {
             Text(
-                text = reviewBtnText.uppercase(),
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
+                text = "Review $selectedMonthLabel",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 0.5.sp
+                )
             )
-        }
-    }
-}
-
-// Dual Axis custom chart viewport implementation
-@Composable
-fun DualAxisChartView(
-    trends: List<MonthlyTrendData>,
-    modifier: Modifier = Modifier
-) {
-    if (trends.isEmpty()) {
-        Box(
-            modifier = modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("No trend data available", color = MutedGreyText)
-        }
-        return
-    }
-
-    Column(
-        modifier = modifier.fillMaxSize()
-    ) {
-        Canvas(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            val totalWidth = size.width
-            val totalHeight = size.height
-
-            val maxVal = maxOf(
-                trends.maxOfOrNull { it.income } ?: 1.0,
-                trends.maxOfOrNull { it.expenses } ?: 1.0,
-                1.0
-            )
-            // Add some safety height headroom (1.15 multiplier)
-            val limitVal = maxVal * 1.15
-            val safeLimitVal = if (limitVal <= 0.0) 1.0 else limitVal
-
-            val pointCount = trends.size
-            val divisor = (pointCount - 1).coerceAtLeast(1)
-            val xInterval = totalWidth / divisor
-
-            // Draw basic y-grid background guidelines
-            val gridLinesCount = 3
-            for (i in 0..gridLinesCount) {
-                val y = totalHeight * i / gridLinesCount
-                drawLine(
-                    color = BorderOutline.copy(alpha = 0.5f),
-                    start = Offset(0f, y),
-                    end = Offset(totalWidth, y),
-                    strokeWidth = 1.dp.toPx()
-                )
-            }
-
-            // Draw 1: Bar Chart Series represents monthly expenses (Purple)
-            trends.forEachIndexed { idx, data ->
-                val barHeightFraction = (data.expenses / safeLimitVal).toFloat()
-                val barHeight = totalHeight * barHeightFraction
-                val xCenter = idx * xInterval
-                val barWidth = 20.dp.toPx()
-
-                // Centering bounds
-                val left = xCenter - (barWidth / 2)
-                val top = totalHeight - barHeight
-
-                drawRoundRect(
-                    color = Color(0xFFB39DDB), // Light Purple
-                    topLeft = Offset(left, top),
-                    size = Size(barWidth, barHeight),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx())
-                )
-            }
-
-            // Draw 2: Line Chart Series represents monthly income (Mint Green)
-            val linePoints = trends.mapIndexed { idx, data ->
-                val yFraction = (data.income / safeLimitVal).toFloat()
-                val y = totalHeight - (totalHeight * yFraction)
-                val x = idx * xInterval
-                Offset(x, y)
-            }
-
-            // Connect nodes to form path lines if possible
-            if (linePoints.size > 1) {
-                for (i in 0 until linePoints.size - 1) {
-                    drawLine(
-                        color = MintLimePrimary,
-                        start = linePoints[i],
-                        end = linePoints[i + 1],
-                        strokeWidth = 3.dp.toPx(),
-                        cap = StrokeCap.Round
-                    )
-                }
-            }
-
-            // Draw circles at data nodes
-            linePoints.forEach { pt ->
-                // outer outline circle
-                drawCircle(
-                    color = NearBlackBackground,
-                    radius = 7.dp.toPx(),
-                    center = pt
-                )
-                // inline colorful circle
-                drawCircle(
-                    color = MintLimePrimary,
-                    radius = 5.dp.toPx(),
-                    center = pt
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Text labels below columns
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(24.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            trends.forEach { data ->
-                Text(
-                    text = data.monthLabel.split("'").firstOrNull() ?: "",
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                    color = MutedGreyText,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.width(36.dp)
-                )
-            }
         }
     }
 }
@@ -1550,7 +1744,7 @@ fun TransactionListItemRow(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = tx.beneficiary,
+                    text = formatYesBankBeneficiary(tx.beneficiary),
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                     color = PureWhiteText,
                     maxLines = 1,
@@ -1687,7 +1881,7 @@ fun ParsedTransactionDetailSheet(
             )
             SheetDetailRow(
                 label = "Beneficiary",
-                value = transaction.beneficiary
+                value = formatYesBankBeneficiary(transaction.beneficiary)
             )
             SheetDetailRow(
                 label = "Account Info",
@@ -1770,21 +1964,6 @@ fun ParsedTransactionDetailSheet(
             )
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(
-            onClick = onDismiss,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MintLimePrimary,
-                contentColor = DarkGreenOnPrimary
-            ),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Text("VERIFIED & CONFIRMED", fontWeight = FontWeight.Bold)
-        }
     }
 }
 
@@ -1830,7 +2009,15 @@ fun getCategoryAsset(category: String): Pair<String, Color> {
         "Transfer" -> "↔️" to Color(0xFF9C27B0)       // Purple
         "Travel" -> "🧳" to Color(0xFF673AB7)         // Violet
         "Rent" -> "R" to Color(0xFF4CAF50)            // Green (white R inside green bubble)
-        else -> "❓" to Color(0xFFAB47BC)
+        else -> {
+            val trimmed = category.trim()
+            val firstChar = if (trimmed.isNotEmpty()) {
+                trimmed.first().uppercaseChar().toString()
+            } else {
+                "❓"
+            }
+            firstChar to Color(0xFFAB47BC)
+        }
     }
 }
 
@@ -1854,7 +2041,7 @@ fun CategoryGridItem(
                 color = if (isSelected) Color(0xFF3E8E41) else Color.Transparent,
                 shape = RoundedCornerShape(12.dp)
             )
-            .padding(vertical = 12.dp, horizontal = 4.dp),
+            .padding(vertical = 6.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -1874,11 +2061,11 @@ fun CategoryGridItem(
                 text = iconStr,
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
-                fontSize = if (iconStr == "R") 22.sp else 24.sp
+                fontSize = if (iconStr.length == 1) 22.sp else 24.sp
             )
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
         // Capitalized ellipsized text under category
         val displayName = if (category.length > 10) {
@@ -1897,7 +2084,7 @@ fun CategoryGridItem(
             overflow = TextOverflow.Ellipsis
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
         if (isSelected) {
             Box(
@@ -1982,11 +2169,11 @@ fun CategoriesSelectionSheet(
         LazyVerticalGrid(
             columns = GridCells.Fixed(3),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f, fill = false)
-                .padding(bottom = 20.dp)
+                .padding(bottom = 12.dp)
         ) {
             items(allCategories) { category ->
                 CategoryGridItem(
@@ -2132,7 +2319,7 @@ fun EmptyStatePlaceholder() {
     }
 }
 
-// Consolidated 6 months history tracker helper
+// Consolidated 36 months history tracker helper
 fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendData> {
     val format = SimpleDateFormat("MMM", Locale.US)
     val yearFormat = SimpleDateFormat("yy", Locale.US)
@@ -2141,7 +2328,7 @@ fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendDa
     val monthIncomes = mutableMapOf<String, Double>()
     val monthExpenses = mutableMapOf<String, Double>()
 
-    for (i in 5 downTo 0) {
+    for (i in 35 downTo 0) {
         val targetCal = Calendar.getInstance()
         targetCal.add(Calendar.MONTH, -i)
         val monthStr = format.format(targetCal.time)
@@ -2175,12 +2362,12 @@ fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendDa
         )
     }
 
-    // Defensive check: If results list contains fewer than 6 entries for any reason,
+    // Defensive check: If results list contains fewer than 36 entries for any reason,
     // dynamically pad the list with empty placeholders to avoid IndexOutOfBoundsException
-    if (result.size < 6) {
+    if (result.size < 36) {
         val paddedResult = result.toMutableList()
-        while (paddedResult.size < 6) {
-            val missingCount = 6 - paddedResult.size
+        while (paddedResult.size < 36) {
+            val missingCount = 36 - paddedResult.size
             val targetCal = Calendar.getInstance()
             targetCal.add(Calendar.MONTH, -missingCount)
             val monthStr = format.format(targetCal.time)
@@ -2192,6 +2379,29 @@ fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendDa
     }
 
     return result
+}
+
+fun formatYesBankBeneficiary(beneficiary: String): String {
+    if (beneficiary.contains("YES BANK", ignoreCase = true) && beneficiary.contains("@")) {
+        val indexAt = beneficiary.indexOf('@')
+        if (indexAt != -1) {
+            var afterAt = beneficiary.substring(indexAt + 1).trim()
+            val dateRegex = Regex("(?i)\\b\\d{2}[-/]\\d{2}[-/]\\d{4}.*")
+            afterAt = afterAt.replace(dateRegex, "").trim()
+            
+            val timeRegex = Regex("(?i)\\b\\d{2}:\\d{2}(?::\\d{2})?.*")
+            afterAt = afterAt.replace(timeRegex, "").trim()
+
+            var clean = afterAt
+            while (clean.endsWith(".") || clean.endsWith(",") || clean.endsWith("-") || clean.endsWith("_")) {
+                clean = clean.dropLast(1).trim()
+            }
+            if (clean.isNotBlank()) {
+                return clean
+            }
+        }
+    }
+    return beneficiary
 }
 
 @Composable

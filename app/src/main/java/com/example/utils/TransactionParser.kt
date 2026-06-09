@@ -224,6 +224,27 @@ object TransactionParser {
 
     private fun cleanBeneficiary(input: String): String {
         var clean = input.trim()
+        
+        // Special logic for YES BANK transactions: extract the merchant text between @ and before date-timestamp
+        if (clean.contains("YES BANK", ignoreCase = true) && clean.contains("@")) {
+            val indexAt = clean.indexOf('@')
+            if (indexAt != -1) {
+                var afterAt = clean.substring(indexAt + 1).trim()
+                
+                // Remove date (e.g. 09-06-2026)
+                val dateRegex = Regex("(?i)\\b\\d{2}[-/]\\d{2}[-/]\\d{4}.*")
+                afterAt = afterAt.replace(dateRegex, "").trim()
+                
+                // Remove time (e.g. 05:52:50)
+                val timeRegex = Regex("(?i)\\b\\d{2}:\\d{2}(?::\\d{2})?.*")
+                afterAt = afterAt.replace(timeRegex, "").trim()
+                
+                if (afterAt.isNotBlank()) {
+                    clean = afterAt
+                }
+            }
+        }
+
         // Remove trailing commas, periods or spaces
         while (clean.endsWith(".") || clean.endsWith(",") || clean.endsWith("-") || clean.endsWith("_")) {
             clean = clean.dropLast(1).trim()
