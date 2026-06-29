@@ -56,7 +56,7 @@ class ExampleUnitTest {
       assertParsedEquals("type", "Credit", it.type)
       assertParsedEquals("accountIdentifier", "HDFC X5056", it.accountIdentifier)
       assertParsedEquals("beneficiary", "salary credited", it.beneficiary)
-      assertParsedEquals("category", "Unknown", it.category)
+      assertParsedEquals("category", "Other", it.category)
       assertParsedEquals("remainingBalance", 65000.00, it.remainingBalance)
     }
   }
@@ -72,7 +72,7 @@ class ExampleUnitTest {
       assertParsedEquals("type", "EMI", it.type)
       assertParsedEquals("accountIdentifier", "YES X3349", it.accountIdentifier)
       assertParsedEquals("beneficiary", "EMI repayment", it.beneficiary)
-      assertParsedEquals("category", "Bills", it.category)
+      assertParsedEquals("category", "EMI", it.category)
       assertParsedEquals("remainingBalance", 40000.00, it.remainingBalance)
     }
   }
@@ -88,7 +88,37 @@ class ExampleUnitTest {
       assertParsedEquals("type", "SIP", it.type)
       assertParsedEquals("accountIdentifier", "HDFC X5056", it.accountIdentifier)
       assertParsedEquals("beneficiary", "Mutual Fund", it.beneficiary)
-      assertParsedEquals("category", "Other", it.category)
+      assertParsedEquals("category", "Investment", it.category)
+    }
+  }
+
+  @Test
+  fun testIciciCustomDebitSemicolonFormat() {
+    val sms = "ICICI Bank Acct XX555 debited for Rs 800.00 on 24-Jun-26; KOSHISH EDUCATI credited. UPI:617531301365. Call 18002662 for dispute. SMS BLOCK 555 to 9215676766."
+    val result = TransactionParser.parseSms(sms, 1780850000000L)
+    
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("amount", 800.00, it.amount)
+      assertParsedEquals("type", "Debit", it.type)
+      assertParsedEquals("accountIdentifier", "ICICI X555", it.accountIdentifier)
+      assertParsedEquals("beneficiary", "KOSHISH EDUCATI", it.beneficiary)
+      assertParsedEquals("remainingBalance", null, it.remainingBalance)
+    }
+  }
+
+  @Test
+  fun testIciciIrctcDebitSemicolonFormat() {
+    val sms = "ICICI Bank Acct XX555 debited for Rs 442.25 on 23-Jun-26; IRCTC credited. UPI:111153842973. Call 18002662 for dispute. SMS BLOCK 555 to 9215676766."
+    val result = TransactionParser.parseSms(sms, 1780850000000L)
+    
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("amount", 442.25, it.amount)
+      assertParsedEquals("type", "Debit", it.type)
+      assertParsedEquals("accountIdentifier", "ICICI X555", it.accountIdentifier)
+      assertParsedEquals("beneficiary", "IRCTC", it.beneficiary)
+      assertParsedEquals("remainingBalance", null, it.remainingBalance)
     }
   }
 

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.provider.Telephony
 import android.util.Log
 import com.example.data.AppDatabase
+import com.example.utils.NotificationHelper
 import com.example.utils.TransactionParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +33,13 @@ class SMSReceiver : BroadcastReceiver() {
                         try {
                             val db = AppDatabase.getDatabase(context)
                             db.transactionDao().insertTransaction(parsed)
+                            
+                            // Trigger dynamic notify
+                            if (parsed.type == "Reminder") {
+                                NotificationHelper.showDueReminderNotification(context, parsed, 2)
+                            } else {
+                                NotificationHelper.showTransactionNotification(context, parsed)
+                            }
                         } catch (e: Exception) {
                             Log.e("SMSReceiver", "Failed to cache parsed transaction", e)
                         }

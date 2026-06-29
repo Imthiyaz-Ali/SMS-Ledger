@@ -113,6 +113,12 @@ data class MerchantAgg(
     val count: Int
 )
 
+data class BulkUpdateDialogInfo(
+    val transaction: TransactionSMS,
+    val newCategory: String,
+    val priorTransactions: List<TransactionSMS>
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SMSLedgerApp(
@@ -122,15 +128,21 @@ fun SMSLedgerApp(
     val context = LocalContext.current
     val transactions by viewModel.transactions.collectAsState()
     val accountBalances by viewModel.accountBalances.collectAsState()
+    val approvedAccounts by viewModel.approvedAccounts.collectAsState()
+    val rejectedAccounts by viewModel.rejectedAccounts.collectAsState()
 
     // Screen State selector (0 = Home/Dashboard, 1 = Analysis/Detailed, 2 = Trends)
     var currentScreenTabIndex by remember { mutableStateOf(0) }
+    var selectedFilterMonthLabel by remember { mutableStateOf<String?>(null) }
 
     // Dialog state for viewing full text and verification BottomSheet
     var selectedTransaction by remember { mutableStateOf<TransactionSMS?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
     var showCategorySheetForTransaction by remember { mutableStateOf<TransactionSMS?>(null) }
     var categorySheetOpenedFromDetail by remember { mutableStateOf(false) }
+    var showTypeSheetForTransaction by remember { mutableStateOf<TransactionSMS?>(null) }
+    var typeSheetOpenedFromDetail by remember { mutableStateOf(false) }
+    var bulkUpdateDialogInfo by remember { mutableStateOf<BulkUpdateDialogInfo?>(null) }
 
     // Local permission status holder
     var hasSMSPermission by remember {
@@ -140,17 +152,33 @@ fun SMSLedgerApp(
         )
     }
 
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permMap ->
         val readGranted = permMap[Manifest.permission.READ_SMS] ?: false
         val receiveGranted = permMap[Manifest.permission.RECEIVE_SMS] ?: false
+        val notifyGranted = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            permMap[Manifest.permission.POST_NOTIFICATIONS] ?: false
+        } else {
+            true
+        }
         hasSMSPermission = readGranted && receiveGranted
+        hasNotificationPermission = notifyGranted
         if (hasSMSPermission) {
             viewModel.scanDeviceInbox(context)
             Toast.makeText(context, "Permissions granted! Syncing SMS...", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(context, "Permissions denied. Real parsing disabled.", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Permissions denied. Real parsing/notifications may be disabled.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -169,14 +197,14 @@ fun SMSLedgerApp(
     val currentMonthExpenses = remember(transactions) {
         transactions.filter { tx ->
             val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-            format == currentMonthKey && tx.type != "Credit"
+            format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && !tx.category.equals("Transfer", ignoreCase = true)
         }.sumOf { it.amount }
     }
 
     val currentMonthIncome = remember(transactions) {
         transactions.filter { tx ->
             val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-            format == currentMonthKey && tx.type == "Credit"
+            format == currentMonthKey && tx.type == "Credit" && !tx.category.equals("Transfer", ignoreCase = true)
         }.sumOf { it.amount }
     }
 
@@ -195,16 +223,65 @@ fun SMSLedgerApp(
                     .fillMaxWidth()
             ) {
                 when (currentScreenTabIndex) {
-                    0 -> DashboardMainScreen(
-                        transactions = transactions,
-                        accountBalances = accountBalances,
-                        totalExpenses = currentMonthExpenses,
-                        totalIncome = currentMonthIncome,
-                        hasSMSPermission = hasSMSPermission,
+                    0 -> {
+                        val uniqueCreditedBalances = remember(accountBalances, transactions, rejectedAccounts) {
+                            accountBalances.filter { acc ->
+                                if (rejectedAccounts.contains(acc.accountIdentifier)) {
+                                    return@filter false
+                                }
+                                val lowerAcc = acc.accountIdentifier.lowercase(Locale.getDefault())
+                                // Real bank filter
+                                val isRealBank = lowerAcc.contains("hdfc") ||
+                                                 lowerAcc.contains("yes") ||
+                                                 lowerAcc.contains("icici") ||
+                                                 lowerAcc.contains("sbi") ||
+                                                 lowerAcc.contains("axis") ||
+                                                 lowerAcc.contains("kotak") ||
+                                                 lowerAcc.contains("hsbc") ||
+                                                 lowerAcc.contains("paytm")
+
+                                // Has at least one 'Credit' transaction in the full list
+                                val hasBeenCredited = transactions.any { tx ->
+                                    tx.accountIdentifier.equals(acc.accountIdentifier, ignoreCase = true) &&
+                                    tx.type.equals("Credit", ignoreCase = true)
+                                }
+                                isRealBank && hasBeenCredited
+                            }.distinctBy { acc ->
+                                // Group/distinct by account last digits to prevent duplicates like "YES X3349" and "YES Bank X3349"
+                                val matcher = java.util.regex.Pattern.compile("(\\d{3,6})").matcher(acc.accountIdentifier)
+                                if (matcher.find()) {
+                                    matcher.group(1)
+                                } else {
+                                    acc.accountIdentifier.lowercase(Locale.getDefault())
+                                }
+                            }
+                        }
+
+                        DashboardMainScreen(
+                            transactions = transactions,
+                            accountBalances = uniqueCreditedBalances,
+                            approvedAccounts = approvedAccounts,
+                            rejectedAccounts = rejectedAccounts,
+                            onApproveAccount = { viewModel.approveAccount(it) },
+                            onRejectAccount = { viewModel.rejectAccount(it) },
+                            onResetAllAccounts = { viewModel.resetAllAccountStatuses() },
+                            totalExpenses = currentMonthExpenses,
+                            totalIncome = currentMonthIncome,
+                            hasSMSPermission = hasSMSPermission,
                         onRequestPermission = {
-                            permissionLauncher.launch(
-                                arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
-                            )
+                            val permissions = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                                arrayOf(
+                                    Manifest.permission.READ_SMS,
+                                    Manifest.permission.RECEIVE_SMS,
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                )
+                            } else {
+                                arrayOf(
+                                    Manifest.permission.READ_SMS,
+                                    Manifest.permission.RECEIVE_SMS
+                                )
+                            }
+                            permissionLauncher.launch(permissions)
                         },
                         onScanClick = {
                             viewModel.scanDeviceInbox(context) { count ->
@@ -220,24 +297,92 @@ fun SMSLedgerApp(
                             categorySheetOpenedFromDetail = false
                             showCategorySheetForTransaction = tx
                         },
-                        onNavigateToTab = { index -> currentScreenTabIndex = index }
-                    )
-                    1 -> AnalysisDetailedScreen(
-                        transactions = transactions,
-                        totalExpenses = currentMonthExpenses,
-                        onTransactionClick = { tx ->
-                            selectedTransaction = tx
-                            showBottomSheet = true
-                        },
-                        onCategoryClick = { tx ->
-                            categorySheetOpenedFromDetail = false
-                            showCategorySheetForTransaction = tx
+                        onNavigateToTab = { index -> currentScreenTabIndex = index },
+                        onSimulateNotifications = {
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                Toast.makeText(context, "Grant Notification Permission to see alerts!", Toast.LENGTH_SHORT).show()
+                                val permissions = arrayOf(
+                                    Manifest.permission.READ_SMS,
+                                    Manifest.permission.RECEIVE_SMS,
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                )
+                                permissionLauncher.launch(permissions)
+                            } else {
+                                val sampleTx = TransactionSMS(
+                                    id = 999991L,
+                                    smsUniqueId = "mock_tx_1",
+                                    accountIdentifier = "YES Bank Acc X3349",
+                                    amount = 40.0,
+                                    beneficiary = "ALEEM ULLA KHAN",
+                                    timestamp = System.currentTimeMillis() - 22 * 60 * 1000, // 22 minutes ago
+                                    type = "Debit",
+                                    category = "Shopping",
+                                    rawSms = "Alert: Your YES Bank Acc X3349 has been debited by INR 40.00 for ALEEM ULLA KHAN. Avl Lmt INR 38,000.00.",
+                                    remainingBalance = 38000.0
+                                )
+                                val sampleDue = TransactionSMS(
+                                    id = 999992L,
+                                    smsUniqueId = "mock_tx_2",
+                                    accountIdentifier = "ICICI credit (6008)",
+                                    amount = 7413.0,
+                                    beneficiary = "ICICI Bank",
+                                    timestamp = System.currentTimeMillis() - 3 * 3600 * 1000, // 3 hours ago
+                                    type = "Reminder",
+                                    category = "Bill Payment",
+                                    rawSms = "Your bill of Rs 7413.00 on ICICI card is due in 2 days. Kindly pay.",
+                                    remainingBalance = null
+                                )
+                                com.example.utils.NotificationHelper.showTransactionNotification(context, sampleTx)
+                                com.example.utils.NotificationHelper.showDueReminderNotification(context, sampleDue, 2)
+                                Toast.makeText(context, "🔔 Simulating 2 Screen-Accurate Notifications! Check notification drawer.", Toast.LENGTH_LONG).show()
+                            }
                         }
                     )
+                    }
+                    1 -> {
+                        val filteredTxs = remember(transactions, selectedFilterMonthLabel) {
+                            if (selectedFilterMonthLabel != null) {
+                                transactions.filter { tx ->
+                                    val txCal = Calendar.getInstance().apply { timeInMillis = tx.timestamp }
+                                    val m = SimpleDateFormat("MMM", Locale.US).format(txCal.time)
+                                    val y = SimpleDateFormat("yy", Locale.US).format(txCal.time)
+                                    "$m'$y" == selectedFilterMonthLabel
+                                }
+                            } else {
+                                transactions
+                            }
+                        }
+                        val filteredExpenses = remember(filteredTxs, selectedFilterMonthLabel) {
+                            if (selectedFilterMonthLabel != null) {
+                                filteredTxs.filter { it.type != "Credit" && it.type != "Reminder" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
+                            } else {
+                                currentMonthExpenses
+                            }
+                        }
+                        AnalysisDetailedScreen(
+                            transactions = filteredTxs,
+                            totalExpenses = filteredExpenses,
+                            selectedFilterMonthLabel = selectedFilterMonthLabel,
+                            onClearFilter = { selectedFilterMonthLabel = null },
+                            onTransactionClick = { tx ->
+                                selectedTransaction = tx
+                                showBottomSheet = true
+                            },
+                            onCategoryClick = { tx ->
+                                categorySheetOpenedFromDetail = false
+                                showCategorySheetForTransaction = tx
+                            }
+                        )
+                    }
                     2 -> AdvancedTrendsScreen(
                         transactions = transactions,
                         totalExpenses = currentMonthExpenses,
-                        totalIncome = currentMonthIncome
+                        totalIncome = currentMonthIncome,
+                        onReviewMonth = { monthLabel ->
+                            selectedFilterMonthLabel = monthLabel
+                            currentScreenTabIndex = 1
+                        }
                     )
                 }
             }
@@ -301,6 +446,45 @@ fun SMSLedgerApp(
                         categorySheetOpenedFromDetail = true
                         showCategorySheetForTransaction = selectedTransaction
                         showBottomSheet = false
+                    },
+                    onEditType = {
+                        typeSheetOpenedFromDetail = true
+                        showTypeSheetForTransaction = selectedTransaction
+                        showBottomSheet = false
+                    }
+                )
+            }
+        }
+
+        // Type selection sheet
+        if (showTypeSheetForTransaction != null) {
+            val tx = showTypeSheetForTransaction!!
+            ModalBottomSheet(
+                onDismissRequest = {
+                    showTypeSheetForTransaction = null
+                    if (typeSheetOpenedFromDetail) {
+                        showBottomSheet = true
+                    }
+                },
+                containerColor = LightCharcoalSurface,
+                contentColor = PureWhiteText,
+                tonalElevation = 16.dp
+            ) {
+                TypeSelectionSheet(
+                    selectedType = tx.type,
+                    onTypeSelected = { newType ->
+                        viewModel.updateTransactionType(tx.id, newType)
+                        selectedTransaction = selectedTransaction?.copy(type = newType)
+                        showTypeSheetForTransaction = null
+                        if (typeSheetOpenedFromDetail) {
+                            showBottomSheet = true
+                        }
+                    },
+                    onDismiss = {
+                        showTypeSheetForTransaction = null
+                        if (typeSheetOpenedFromDetail) {
+                            showBottomSheet = true
+                        }
                     }
                 )
             }
@@ -313,7 +497,8 @@ fun SMSLedgerApp(
                 transactions.map { it.category }.distinct().filter { 
                     it != "Bills" && it != "EMI" && it != "Entertainment" && it != "Food & Drinks" &&
                     it != "Fuel" && it != "Groceries" && it != "Health" && it != "Investment" &&
-                    it != "Other" && it != "Shopping" && it != "Transfer" && it != "Travel" && it != "Rent"
+                    it != "Other" && it != "Shopping" && it != "Transfer" && it != "Travel" && 
+                    it != "Rent" && it != "Cash Withdrawl" && it != "Cash Withdrawal"
                 }
             }
             ModalBottomSheet(
@@ -330,11 +515,34 @@ fun SMSLedgerApp(
                 CategoriesSelectionSheet(
                     selectedCategory = tx.category,
                     onCategorySelected = { newCategory ->
-                        viewModel.updateTransactionCategory(tx.id, newCategory)
-                        selectedTransaction = selectedTransaction?.copy(category = newCategory)
-                        showCategorySheetForTransaction = null
-                        if (categorySheetOpenedFromDetail) {
-                            showBottomSheet = true
+                        if (newCategory != tx.category && tx.beneficiary.isNotBlank()) {
+                            val prior = transactions.filter {
+                                it.beneficiary.equals(tx.beneficiary, ignoreCase = true) &&
+                                it.timestamp < tx.timestamp &&
+                                it.category != newCategory
+                            }
+                            if (prior.isNotEmpty()) {
+                                bulkUpdateDialogInfo = BulkUpdateDialogInfo(
+                                    transaction = tx,
+                                    newCategory = newCategory,
+                                    priorTransactions = prior
+                                )
+                                showCategorySheetForTransaction = null
+                            } else {
+                                viewModel.updateTransactionCategory(tx.id, newCategory)
+                                selectedTransaction = selectedTransaction?.copy(category = newCategory)
+                                showCategorySheetForTransaction = null
+                                if (categorySheetOpenedFromDetail) {
+                                    showBottomSheet = true
+                                }
+                            }
+                        } else {
+                            viewModel.updateTransactionCategory(tx.id, newCategory)
+                            selectedTransaction = selectedTransaction?.copy(category = newCategory)
+                            showCategorySheetForTransaction = null
+                            if (categorySheetOpenedFromDetail) {
+                                showBottomSheet = true
+                            }
                         }
                     },
                     onDismiss = {
@@ -347,16 +555,99 @@ fun SMSLedgerApp(
                 )
             }
         }
+
+        if (bulkUpdateDialogInfo != null) {
+            val info = bulkUpdateDialogInfo!!
+            val cleanName = formatYesBankBeneficiary(info.transaction.beneficiary)
+            AlertDialog(
+                onDismissRequest = {
+                    bulkUpdateDialogInfo = null
+                    if (categorySheetOpenedFromDetail) {
+                        showBottomSheet = true
+                    }
+                },
+                title = {
+                    Text(
+                        text = "Update Past Transactions?",
+                        fontWeight = FontWeight.Bold,
+                        color = PureWhiteText
+                    )
+                },
+                text = {
+                    Text(
+                        text = "You changed the category of '$cleanName' to '${info.newCategory}'.\n\nWould you like to also update all ${info.priorTransactions.size} past transaction(s) with the same beneficiary to this category?",
+                        color = PureWhiteText
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MintLimePrimary,
+                            contentColor = DarkGreenOnPrimary
+                        ),
+                        onClick = {
+                            viewModel.updateTransactionCategory(info.transaction.id, info.newCategory)
+                            viewModel.updatePastTransactionsCategory(
+                                beneficiary = info.transaction.beneficiary,
+                                timestamp = info.transaction.timestamp,
+                                category = info.newCategory
+                            )
+                            selectedTransaction = selectedTransaction?.copy(category = info.newCategory)
+                            bulkUpdateDialogInfo = null
+                            if (categorySheetOpenedFromDetail) {
+                                showBottomSheet = true
+                            }
+                        }
+                    ) {
+                        Text("Update All", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(
+                            onClick = {
+                                bulkUpdateDialogInfo = null
+                                showCategorySheetForTransaction = info.transaction
+                            }
+                        ) {
+                            Text("Cancel", color = MutedGreyText)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(
+                            onClick = {
+                                viewModel.updateTransactionCategory(info.transaction.id, info.newCategory)
+                                selectedTransaction = selectedTransaction?.copy(category = info.newCategory)
+                                bulkUpdateDialogInfo = null
+                                if (categorySheetOpenedFromDetail) {
+                                    showBottomSheet = true
+                                }
+                            }
+                        ) {
+                            Text("Only This", color = MintLimePrimary)
+                        }
+                    }
+                },
+                containerColor = LightCharcoalSurface,
+                textContentColor = PureWhiteText,
+                titleContentColor = PureWhiteText
+            )
+        }
     }
 }
 
 // ==========================================
 // SCREEN 1: DASHBOARD MAIN SCREEN (image_0.png)
 // ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardMainScreen(
     transactions: List<TransactionSMS>,
     accountBalances: List<AccountBalance>,
+    approvedAccounts: Set<String>,
+    rejectedAccounts: Set<String>,
+    onApproveAccount: (String) -> Unit,
+    onRejectAccount: (String) -> Unit,
+    onResetAllAccounts: () -> Unit,
     totalExpenses: Double,
     totalIncome: Double,
     hasSMSPermission: Boolean,
@@ -365,15 +656,20 @@ fun DashboardMainScreen(
     onClearCacheClick: () -> Unit,
     onTransactionClick: (TransactionSMS) -> Unit,
     onCategoryClick: ((TransactionSMS) -> Unit)? = null,
-    onNavigateToTab: (Int) -> Unit
+    onNavigateToTab: (Int) -> Unit,
+    onSimulateNotifications: () -> Unit
 ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    var showAllAccountsSheet by remember { mutableStateOf(false) }
+    var showAllRemindersSheet by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
         // Line 1: Header (Hi Imthiyaz + Subtitle + Search Icon & controls)
         item {
             Row(
@@ -441,6 +737,8 @@ fun DashboardMainScreen(
                             modifier = Modifier.size(18.dp)
                         )
                     }
+
+
                 }
             }
         }
@@ -551,136 +849,308 @@ fun DashboardMainScreen(
             }
         }
 
-        // Line 4: Dues & Reminders/Accounts Previews (HDFC Card XX5056)
+        // SECTION 1.1: Only Accounts
         item {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Accounts & Reminders",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = PureWhiteText
-                )
-
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 4.dp)
-                ) {
-                    // Pre-made card representing HDFC Acc *5056
-                    item {
-                        val hdfcBalance = accountBalances.find { it.accountIdentifier.contains("HDFC", ignoreCase = true) }
-                        val balAmount = hdfcBalance?.remainingBalance ?: 12095.67
-                        val lastSync = if (transactions.isNotEmpty()) "Just now" else "Standard offline"
-                        
-                        Card(
-                            modifier = Modifier
-                                .width(190.dp)
-                                .height(115.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                            border = BorderStroke(1.dp, BorderOutline)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Accounts",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = PureWhiteText
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (approvedAccounts.isNotEmpty() || rejectedAccounts.isNotEmpty()) {
+                        IconButton(
+                            onClick = onResetAllAccounts,
+                            modifier = Modifier.size(24.dp)
                         ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(14.dp),
-                                verticalArrangement = Arrangement.SpaceBetween
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Reset Approvals",
+                                tint = MintLimePrimary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = "VIEW ALL",
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+                    color = MintLimePrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { showAllAccountsSheet = true }
+                )
+            }
+        }
+
+        if (accountBalances.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(85.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                    border = BorderStroke(1.dp, BorderOutline)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "No accounts configured yet. Seed/sync data.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MutedGreyText
+                        )
+                    }
+                }
+            }
+        } else {
+            val previewAccounts = accountBalances.take(2)
+            items(previewAccounts) { accBalance ->
+                val cleanAccName = formatAccountDisplayName(accBalance.accountIdentifier)
+                val isApproved = approvedAccounts.contains(accBalance.accountIdentifier)
+                val balAmount = accBalance.remainingBalance
+                val lastSync = if (transactions.isNotEmpty()) "Just now" else "Standard offline"
+
+                if (isApproved) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                        border = BorderStroke(1.dp, BorderOutline)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = cleanAccName,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = PureWhiteText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Updated: $lastSync",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                    color = MutedGreyText
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                                    color = MintLimePrimary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(MintLimePrimary, CircleShape)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                        border = BorderStroke(1.dp, BorderOutline)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = cleanAccName,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = PureWhiteText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Track account?",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                    color = MutedGreyText
+                                )
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                IconButton(
+                                    onClick = { onRejectAccount(accBalance.accountIdentifier) },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .background(Color(0xFFEF5350).copy(alpha = 0.15f), RoundedCornerShape(8.dp))
                                 ) {
-                                    Text(
-                                        text = "HDFC ACC",
-                                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                                        color = MutedGreyText,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .background(MintLimePrimary, CircleShape)
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Reject",
+                                        tint = Color(0xFFEF5350),
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
 
-                                Column {
-                                    Text(
-                                        text = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
-                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
-                                        color = MintLimePrimary
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Updated: $lastSync",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                        color = MutedGreyText
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                IconButton(
+                                    onClick = { onApproveAccount(accBalance.accountIdentifier) },
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Approve",
+                                        tint = MintLimePrimary,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             }
                         }
                     }
+                }
+            }
+        }
 
-                    // Pre-made Card representing Upcoming Reminders
-                    item {
-                        Card(
-                            modifier = Modifier
-                                .width(190.dp)
-                                .height(115.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                            border = BorderStroke(1.dp, BorderOutline)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(14.dp),
-                                verticalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "DUE REMINDERS",
-                                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                                        color = Color(0xFFFF8A80),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Default.NotificationsActive,
-                                        contentDescription = "🔔",
-                                        tint = Color(0xFFFF8A80),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
+        // SECTION 1.2: Only Reminders
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Reminders",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = PureWhiteText
+                )
+                Text(
+                    text = "VIEW ALL",
+                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+                    color = MintLimePrimary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { showAllRemindersSheet = true }
+                )
+            }
+        }
 
-                                Column {
-                                    Text(
-                                        text = "Airtel Bill • ₹399",
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = PureWhiteText,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "A/c Repay • ₹3500",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                                        color = MutedGreyText,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "Due in 2 days",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                        color = Color(0xFFFF5252)
-                                    )
-                                }
-                            }
+        val recurringDues = transactions.filter { tx ->
+            tx.type == "Reminder"
+        }.distinctBy { formatYesBankBeneficiary(it.beneficiary) }
+
+        if (recurringDues.isEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(85.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                    border = BorderStroke(1.dp, BorderOutline)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "No active reminders found.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MutedGreyText
+                        )
+                    }
+                }
+            }
+        } else {
+            val previewReminders = recurringDues.take(2)
+            items(previewReminders) { due ->
+                val dueLabel = formatYesBankBeneficiary(due.beneficiary)
+                val customLabel = if (due.type == "Reminder") {
+                    val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
+                    if (mStr.find()) {
+                        "Due by ${formatDueDateString(mStr.group(1).removeSuffix("."))}"
+                    } else {
+                        "Reminder Alert"
+                    }
+                } else {
+                    "Estimated cycle"
+                }
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clickable { onTransactionClick(due) },
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                    border = BorderStroke(1.dp, BorderOutline)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = dueLabel,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = PureWhiteText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = customLabel,
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                color = Color(0xFFFF8A80)
+                            )
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                                color = Color(0xFFFF8A80)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.NotificationsActive,
+                                contentDescription = "🔔",
+                                tint = Color(0xFFFF8A80),
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
                     }
                 }
@@ -756,6 +1226,295 @@ fun DashboardMainScreen(
             }
         }
     }
+
+    if (showAllAccountsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showAllAccountsSheet = false },
+            containerColor = LightCharcoalSurface,
+            contentColor = PureWhiteText,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .navigationBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "All Bank Accounts",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = PureWhiteText
+                    )
+                    IconButton(onClick = { showAllAccountsSheet = false }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = PureWhiteText
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    if (accountBalances.isEmpty()) {
+                        item {
+                            Text(
+                                text = "No configured accounts yet.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MutedGreyText
+                            )
+                        }
+                    } else {
+                        items(accountBalances) { accBalance ->
+                            val cleanAccName = formatAccountDisplayName(accBalance.accountIdentifier)
+                            val isApproved = approvedAccounts.contains(accBalance.accountIdentifier)
+                            val balAmount = accBalance.remainingBalance
+                            val lastSync = if (transactions.isNotEmpty()) "Just now" else "Standard offline"
+
+                            if (isApproved) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                                    border = BorderStroke(1.dp, BorderOutline)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(14.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = cleanAccName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = PureWhiteText
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = "Updated: $lastSync",
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                                color = MutedGreyText
+                                            )
+                                        }
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                text = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
+                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                                                color = MintLimePrimary
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(6.dp)
+                                                    .background(MintLimePrimary, CircleShape)
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                                    border = BorderStroke(1.dp, BorderOutline)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = cleanAccName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = PureWhiteText
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = "Track account?",
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                                color = MutedGreyText
+                                            )
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            IconButton(
+                                                onClick = { onRejectAccount(accBalance.accountIdentifier) },
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .background(Color(0xFFEF5350).copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Reject",
+                                                    tint = Color(0xFFEF5350),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.width(8.dp))
+
+                                            IconButton(
+                                                onClick = { onApproveAccount(accBalance.accountIdentifier) },
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = "Approve",
+                                                    tint = MintLimePrimary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+
+    if (showAllRemindersSheet) {
+        val recurringDues = transactions.filter { tx ->
+            tx.type == "Reminder"
+        }.distinctBy { formatYesBankBeneficiary(it.beneficiary) }
+
+        ModalBottomSheet(
+            onDismissRequest = { showAllRemindersSheet = false },
+            containerColor = LightCharcoalSurface,
+            contentColor = PureWhiteText,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .navigationBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "All Active Reminders",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = PureWhiteText
+                    )
+                    IconButton(onClick = { showAllRemindersSheet = false }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = PureWhiteText
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    if (recurringDues.isEmpty()) {
+                        item {
+                            Text(
+                                text = "No active reminders found.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MutedGreyText
+                            )
+                        }
+                    } else {
+                        items(recurringDues) { due ->
+                            val dueLabel = formatYesBankBeneficiary(due.beneficiary)
+                            val customLabel = if (due.type == "Reminder") {
+                                val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
+                                if (mStr.find()) {
+                                    "Due by ${formatDueDateString(mStr.group(1).removeSuffix("."))}"
+                                } else {
+                                    "Reminder Alert"
+                                }
+                            } else {
+                                "Estimated cycle"
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        showAllRemindersSheet = false
+                                        onTransactionClick(due)
+                                    },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                                border = BorderStroke(1.dp, BorderOutline)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text(
+                                            text = dueLabel,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = PureWhiteText
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = customLabel,
+                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                            color = Color(0xFFFF8A80)
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
+                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                                            color = Color(0xFFFF8A80)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.NotificationsActive,
+                                            contentDescription = "🔔",
+                                            tint = Color(0xFFFF8A80),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+}
 }
 
 // ==========================================
@@ -766,7 +1525,9 @@ fun AnalysisDetailedScreen(
     transactions: List<TransactionSMS>,
     totalExpenses: Double,
     onTransactionClick: (TransactionSMS) -> Unit,
-    onCategoryClick: ((TransactionSMS) -> Unit)? = null
+    onCategoryClick: ((TransactionSMS) -> Unit)? = null,
+    selectedFilterMonthLabel: String? = null,
+    onClearFilter: (() -> Unit)? = null
 ) {
     var subTabState by remember { mutableStateOf(0) } // 0 = Transactions, 1 = Categories, 2 = Merchants
 
@@ -781,16 +1542,43 @@ fun AnalysisDetailedScreen(
                 .fillMaxWidth()
                 .padding(vertical = 12.dp)
         ) {
-            Text(
-                text = "Analytics Detail",
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                color = PureWhiteText
-            )
-            Text(
-                text = "A complete breakdown of structured SMS ledgers",
-                style = MaterialTheme.typography.bodySmall,
-                color = MutedGreyText
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Analytics Detail",
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                        color = PureWhiteText
+                    )
+                    Text(
+                        text = "A complete breakdown of structured SMS ledgers",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MutedGreyText
+                    )
+                }
+                if (selectedFilterMonthLabel != null) {
+                    FilledTonalButton(
+                        onClick = { onClearFilter?.invoke() },
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MintLimePrimary.copy(alpha = 0.15f),
+                            contentColor = MintLimePrimary
+                        ),
+                        border = BorderStroke(1.dp, MintLimePrimary.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(
+                            text = "Show All ($selectedFilterMonthLabel ✕)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                            color = MintLimePrimary
+                        )
+                    }
+                }
+            }
         }
 
         // Shared screen spending metric: Big dark circle view repeating spent
@@ -1121,7 +1909,8 @@ fun MerchantCardView(merchant: MerchantAgg) {
 fun AdvancedTrendsScreen(
     transactions: List<TransactionSMS>,
     totalExpenses: Double,
-    totalIncome: Double
+    totalIncome: Double,
+    onReviewMonth: (String) -> Unit
 ) {
     val monthlyTrendList = remember(transactions) { getMonthlyTrendData(transactions) }
     
@@ -1142,10 +1931,10 @@ fun AdvancedTrendsScreen(
 
     // Dynamic metrics calculated for the selected month
     val selectedSpends = remember(selectedMonthTransactions) {
-        selectedMonthTransactions.filter { it.type != "Credit" }.sumOf { it.amount }
+        selectedMonthTransactions.filter { it.type != "Credit" && it.type != "Reminder" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
     }
     val selectedIncome = remember(selectedMonthTransactions) {
-        selectedMonthTransactions.filter { it.type == "Credit" }.sumOf { it.amount }
+        selectedMonthTransactions.filter { it.type == "Credit" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
     }
 
     val context = LocalContext.current
@@ -1672,7 +2461,7 @@ fun AdvancedTrendsScreen(
         // 5. Dynamic Prominent Action Button at the extremely bottom
         Button(
             onClick = {
-                Toast.makeText(context, "Review $selectedMonthLabel is standard and fully aligned!", Toast.LENGTH_SHORT).show()
+                onReviewMonth(selectedMonthLabel)
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -1763,10 +2552,11 @@ fun TransactionListItemRow(
             }
         }
 
-        // Amount colored appropriately: credit is green, others are red
+        // Amount colored appropriately: transfer is violet, credit is green, others are red
+        val isTransfer = tx.category.equals("Transfer", ignoreCase = true)
         val isCredit = tx.type == "Credit"
-        val labelPrefix = if (isCredit) "+" else "-"
-        val textColorVal = if (isCredit) Color(0xFF66BB6A) else Color(0xFFFF5252)
+        val labelPrefix = if (isTransfer) "⇄ " else if (isCredit) "+" else "-"
+        val textColorVal = if (isTransfer) Color(0xFFD0BCFF) else if (isCredit) Color(0xFF66BB6A) else Color(0xFFFF5252)
 
         Text(
             text = String.format(Locale.getDefault(), "%s₹%,.0f", labelPrefix, tx.amount),
@@ -1825,7 +2615,8 @@ fun UnifiedBottomNavItem(
 fun ParsedTransactionDetailSheet(
     transaction: TransactionSMS,
     onDismiss: () -> Unit,
-    onEditCategory: () -> Unit
+    onEditCategory: () -> Unit,
+    onEditType: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1887,11 +2678,39 @@ fun ParsedTransactionDetailSheet(
                 label = "Account Info",
                 value = transaction.accountIdentifier
             )
-            SheetDetailRow(
-                label = "Type",
-                value = transaction.type,
-                valueColor = if (transaction.type == "Credit") Color(0xFF66BB6A) else Color(0xFFFF5252)
-            )
+            val isSheetTxTransfer = transaction.category.equals("Transfer", ignoreCase = true)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onEditType() }
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Type",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MutedGreyText
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val typeValue = if (isSheetTxTransfer) "Transfer" else transaction.type
+                    val typeColor = if (isSheetTxTransfer) Color(0xFFD0BCFF) else if (transaction.type == "Credit") Color(0xFF66BB6A) else if (transaction.type == "Reminder") Color(0xFFFF8A80) else Color(0xFFFF5252)
+                    Text(
+                        text = typeValue,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = typeColor
+                    )
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = "Edit Type",
+                        tint = MutedGreyText,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2009,6 +2828,7 @@ fun getCategoryAsset(category: String): Pair<String, Color> {
         "Transfer" -> "↔️" to Color(0xFF9C27B0)       // Purple
         "Travel" -> "🧳" to Color(0xFF673AB7)         // Violet
         "Rent" -> "R" to Color(0xFF4CAF50)            // Green (white R inside green bubble)
+        "Cash Withdrawl", "Cash Withdrawal" -> "💵" to Color(0xFFFF9800) // Money/Cash Icon (Amber Orange)
         else -> {
             val trimmed = category.trim()
             val firstChar = if (trimmed.isNotEmpty()) {
@@ -2106,6 +2926,98 @@ fun CategoryGridItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun TypeSelectionSheet(
+    selectedType: String,
+    onTypeSelected: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val types = listOf("Credit", "Debit", "EMI", "SIP")
+    
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .background(LightCharcoalSurface)
+            .padding(top = 12.dp, bottom = 24.dp, start = 16.dp, end = 16.dp)
+    ) {
+        // Top Row: Close "X" Button and Title
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 20.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(Color.White.copy(alpha = 0.05f), CircleShape)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = PureWhiteText,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            
+            Spacer(modifier = Modifier.width(16.dp))
+            
+            Text(
+                text = "Change Transaction Type",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = PureWhiteText
+            )
+        }
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(types) { type ->
+                val isSelected = type == selectedType
+                
+                Surface(
+                    onClick = { onTypeSelected(type) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSelected) Color.White.copy(alpha = 0.08f) else Color.Transparent,
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (isSelected) MintLimePrimary else Color.White.copy(alpha = 0.05f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val displayType = if (type == "Debit") "Debit (Expense)" else type
+                        Text(
+                            text = displayType,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = if (isSelected) MintLimePrimary else PureWhiteText
+                        )
+                        
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Selected",
+                                tint = MintLimePrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun CategoriesSelectionSheet(
     selectedCategory: String,
     onCategorySelected: (String) -> Unit,
@@ -2115,7 +3027,7 @@ fun CategoriesSelectionSheet(
     val baseCategories = listOf(
         "Bills", "EMI", "Entertainment", "Food & Drinks", "Fuel", 
         "Groceries", "Health", "Investment", "Other", "Shopping", 
-        "Transfer", "Travel", "Rent"
+        "Transfer", "Travel", "Rent", "Cash Withdrawl"
     )
     
     val allCategories = remember(existingCustomCategories) {
@@ -2250,7 +3162,7 @@ fun getCategorySpendList(transactions: List<TransactionSMS>): List<CategoryAgg> 
 
     val currentSpends = transactions.filter { tx ->
         val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-        format == currentMonthKey && tx.type != "Credit"
+        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder"
     }
 
     val grouped = currentSpends.groupBy { it.category }
@@ -2272,7 +3184,7 @@ fun getMerchantSpendList(transactions: List<TransactionSMS>): List<MerchantAgg> 
 
     val currentSpends = transactions.filter { tx ->
         val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-        format == currentMonthKey && tx.type != "Credit"
+        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder"
     }
 
     val grouped = currentSpends.groupBy { it.beneficiary }
@@ -2340,6 +3252,8 @@ fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendDa
     }
 
     for (tx in transactions) {
+        if (tx.type == "Reminder") continue
+        if (tx.category.equals("Transfer", ignoreCase = true)) continue
         val txCal = Calendar.getInstance().apply { timeInMillis = tx.timestamp }
         val m = format.format(txCal.time)
         val y = yearFormat.format(txCal.time)
@@ -2382,6 +3296,17 @@ fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendDa
 }
 
 fun formatYesBankBeneficiary(beneficiary: String): String {
+    val lower = beneficiary.lowercase(Locale.getDefault()).trim()
+    if (lower == "yesbank 3349 card" || lower == "yesbank 3349") {
+        return "Yes Bank 3349 Card"
+    }
+    val yesCardRegex = Regex("yesbank\\s+(\\d{3,6})\\s+card")
+    val match = yesCardRegex.matchEntire(lower)
+    if (match != null) {
+        val digits = match.groupValues[1]
+        return "Yes Bank $digits Card"
+    }
+
     if (beneficiary.contains("YES BANK", ignoreCase = true) && beneficiary.contains("@")) {
         val indexAt = beneficiary.indexOf('@')
         if (indexAt != -1) {
@@ -2402,6 +3327,34 @@ fun formatYesBankBeneficiary(beneficiary: String): String {
         }
     }
     return beneficiary
+}
+
+fun formatAccountDisplayName(identifier: String): String {
+    return com.example.utils.TransactionParser.standardizeAccountIdentifier(identifier)
+}
+
+fun formatDueDateString(rawDate: String): String {
+    val cleaned = rawDate.replace("\\", "/").replace("-", "/").trim()
+    val parts = cleaned.split("/")
+    if (parts.size >= 3) {
+        val day = parts[0].toIntOrNull()
+        val month = parts[1].toIntOrNull()
+        var year = parts[2].trim().toIntOrNull()
+        if (day != null && month != null && year != null) {
+            val months = listOf(
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+            )
+            if (month in 1..12) {
+                val monthName = months[month - 1]
+                if (year < 100) {
+                    year += 2000
+                }
+                return String.format(Locale.getDefault(), "%02d %s %d", day, monthName, year)
+            }
+        }
+    }
+    return rawDate
 }
 
 @Composable
