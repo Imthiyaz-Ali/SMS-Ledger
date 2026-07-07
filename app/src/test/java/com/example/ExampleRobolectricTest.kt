@@ -122,4 +122,54 @@ class ExampleRobolectricTest {
     assertEquals(1, txList.size)
     assertEquals(t1.rawSms, txList[0].rawSms) // still the longer one
   }
+
+  @Test
+  fun testCreditCardPaymentReconciliation() = runBlocking {
+    val reminder = TransactionSMS(
+      smsUniqueId = "cc_reminder_1",
+      timestamp = 1780850000000L,
+      amount = 5643.68,
+      accountIdentifier = "YES X3349",
+      beneficiary = "yesbank 3349 card",
+      type = "Reminder",
+      category = "EMI",
+      remainingBalance = null,
+      rawSms = "Payment of Credit Card X3349 is due on 02/07/26. Total Due Rs.5643.68. Ignore if paid-YES BANK",
+      isCompleted = false
+    )
+
+    val debitTx = TransactionSMS(
+      smsUniqueId = "debit_tx_1",
+      timestamp = 1780860000000L,
+      amount = 5643.68,
+      accountIdentifier = "HDFC X1234",
+      beneficiary = "YES BANK CREDIT CARD",
+      type = "Debit",
+      category = "Bills",
+      remainingBalance = null,
+      rawSms = "INR 5,643.68 debited from HDFC account X1234 on 24-Jun-26 to YES BANK CREDIT CARD."
+    )
+
+    // Insert reminder
+    repository.insert(reminder)
+    
+    // Insert matching debit transaction
+    repository.insert(debitTx)
+
+    // Retrieve all transactions
+    val txList = repository.allTransactions.first()
+    assertEquals(2, txList.size)
+
+    val updatedReminder = txList.find { it.smsUniqueId == "cc_reminder_1" }
+    val updatedDebit = txList.find { it.smsUniqueId == "debit_tx_1" }
+
+    assertNotNull(updatedReminder)
+    assertNotNull(updatedDebit)
+
+    // Verify reminder is completed
+    assertEquals(true, updatedReminder?.isCompleted)
+
+    // Verify debit transaction is re-typed as "Credit Card Payment"
+    assertEquals("Credit Card Payment", updatedDebit?.type)
+  }
 }

@@ -18,5 +18,7 @@ data class TransactionSMS(
     val category: String, // "Food & Drinks", "Rent", "Bills", "Other", "Unknown"
     val accountIdentifier: String,
     val remainingBalance: Double?,
-    val rawSms: String
+    val rawSms: String,
+    val isCompleted: Boolean = false,
+    val sender: String = "Unknown"
 )

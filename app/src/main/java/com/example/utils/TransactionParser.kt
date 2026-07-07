@@ -98,26 +98,57 @@ object TransactionParser {
      * Parses raw SMS body into a structured TransactionSMS object.
      * Returns null if the SMS is not recognized as a transaction.
      */
-    fun parseSms(body: String, timestamp: Long): TransactionSMS? {
+    fun parseSms(body: String, timestamp: Long, sender: String = ""): TransactionSMS? {
         val lowerBody = body.lowercase()
+        val finalSender = if (sender.trim().isNotBlank() && !sender.equals("Unknown", ignoreCase = true)) {
+            sender.trim()
+        } else {
+            if (lowerBody.contains("hdfc")) "HDFC-BANK"
+            else if (lowerBody.contains("yesbank") || lowerBody.contains("yes bank")) "YES-BANK"
+            else "BANK-SMS"
+        }
 
         // Special due alert/reminder case
-        if (lowerBody.contains("is due") || lowerBody.contains("due on") || lowerBody.contains("due by") || (lowerBody.contains("payment") && lowerBody.contains("due"))) {
+        val isDueReminder = (
+            Pattern.compile("(?i)\\bis\\s+due\\b").matcher(body).find() ||
+            Pattern.compile("(?i)\\bdue\\s+for\\b").matcher(body).find() ||
+            Pattern.compile("(?i)\\bdue\\s+on\\b").matcher(body).find() ||
+            Pattern.compile("(?i)\\bdue\\s+by\\b").matcher(body).find() ||
+            Pattern.compile("(?i)\\bdue\\s+tomorrow\\b").matcher(body).find() ||
+            Pattern.compile("(?i)\\bpayment\\s+due\\b").matcher(body).find() ||
+            lowerBody.contains("overdue") ||
+            (lowerBody.contains("due") && (
+                lowerBody.contains("bill") || 
+                lowerBody.contains("pay now") || 
+                Pattern.compile("(?i)ignore\\s*(?:,\\s*)?if\\s*(?:already\\s*)?paid").matcher(body).find()
+            ))
+        ) &&
+        !lowerBody.contains("successfully paid") && 
+        !lowerBody.contains("paid of") &&
+        !lowerBody.contains("has been paid")
+
+        if (isDueReminder) {
             var amt = 0.0
             val totalDueMatcher = Pattern.compile("(?i)total\\s+due\\s*(?:Rs\\.?|INR|USD|₹)?\\s*([0-9,]+(?:\\.[0-9]{2})?)").matcher(body)
             val minDueMatcher = Pattern.compile("(?i)min\\s+due\\s*(?:Rs\\.?|INR|USD|₹)?\\s*([0-9,]+(?:\\.[0-9]{2})?)").matcher(body)
+            val billOfMatcher = Pattern.compile("(?i)bill\\s+of\\s*(?:Rs\\.?|INR|USD|₹)?\\s*([0-9,]+(?:\\.[0-9]{2})?)").matcher(body)
             val amtDueMatcher = Pattern.compile("(?i)(?:due\\s+amount|amt\\s+due)\\s*(?:Rs\\.?|INR|USD|₹)?\\s*([0-9,]+(?:\\.[0-9]{2})?)").matcher(body)
+            val payableMatcher = Pattern.compile("(?i)(?:amount\\s+payable|payable\\s+is|total\\s+payable)\\s*(?:Rs\\.?|INR|USD|₹)?\\s*([0-9,]+(?:\\.[0-9]{2})?)").matcher(body)
             
             if (totalDueMatcher.find()) {
-                amt = totalDueMatcher.group(1).replace(",", "").toDoubleOrNull() ?: 0.0
+                amt = totalDueMatcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
+            } else if (billOfMatcher.find()) {
+                amt = billOfMatcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
             } else if (amtDueMatcher.find()) {
-                amt = amtDueMatcher.group(1).replace(",", "").toDoubleOrNull() ?: 0.0
+                amt = amtDueMatcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
+            } else if (payableMatcher.find()) {
+                amt = payableMatcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
             } else if (minDueMatcher.find()) {
-                amt = minDueMatcher.group(1).replace(",", "").toDoubleOrNull() ?: 0.0
+                amt = minDueMatcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
             } else {
                 val amtMatcher = Pattern.compile("(?i)(?:Rs\\.?|INR|USD|₹)\\s*([0-9,]+(?:\\.[0-9]{2})?)").matcher(body)
                 if (amtMatcher.find()) {
-                    amt = amtMatcher.group(1).replace(",", "").toDoubleOrNull() ?: 0.0
+                    amt = amtMatcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: 0.0
                 }
             }
             
@@ -135,10 +166,10 @@ object TransactionParser {
                     val bank = if (bankMatcher.find()) bankMatcher.group(1)?.uppercase() ?: "ACC" else "ACC"
                     accountId = "${bank} X${tail}"
                 } else {
-                    val accPattern = Pattern.compile("(?i)for\\s+([A-Za-z0-9 ]+?)\\s+is\\s+due")
+                    val accPattern = Pattern.compile("(?i)for\\s+([A-Za-z0-9+ ]+?)\\s+is\\s+due")
                     val accMatcher = accPattern.matcher(body)
                     if (accMatcher.find()) {
-                        accountId = accMatcher.group(1).trim()
+                        accountId = accMatcher.group(1)?.trim() ?: ""
                     } else if (lowerBody.contains("icici bank personal loan")) {
                         accountId = "ICICI Bank Personal Loan XX1565"
                     } else {
@@ -150,16 +181,61 @@ object TransactionParser {
                 }
             }
             
-            var beneficiary = accountId
-            if (lowerBody.contains("yes bank") || lowerBody.contains("yesbank")) {
-                val digitMatcher = Pattern.compile("(\\d{3,6})").matcher(accountId)
-                val digits = if (digitMatcher.find()) digitMatcher.group(1) else "3349"
-                beneficiary = "yesbank $digits card"
-            } else {
-                val cleanAcc = standardizeAccountIdentifier(accountId)
-                beneficiary = cleanAcc.lowercase(java.util.Locale.getDefault())
+            var beneficiary = "Unknown Beneficiary"
+            
+            // Check for service providers or biller names in body first
+            if (lowerBody.contains("jiohome") || lowerBody.contains("jio home")) {
+                beneficiary = "JioHome"
+            } else if (lowerBody.contains("jio")) {
+                beneficiary = "Jio"
+            } else if (lowerBody.contains("airtel")) {
+                beneficiary = "Airtel"
+            } else if (lowerBody.contains("vi ") || lowerBody.contains("vodafone") || lowerBody.contains("idea")) {
+                beneficiary = "Vi"
+            } else if (lowerBody.contains("bsnl")) {
+                beneficiary = "BSNL"
+            } else if (lowerBody.contains("tata play") || lowerBody.contains("tataplay")) {
+                beneficiary = "Tata Play"
+            } else if (lowerBody.contains("lic")) {
+                beneficiary = "LIC"
+            } else if (lowerBody.contains("bescom") || lowerBody.contains("electricity")) {
+                beneficiary = "Electricity"
             }
-
+            
+            if (beneficiary == "Unknown Beneficiary" && sender.isNotBlank() && !sender.equals("Unknown", ignoreCase = true)) {
+                val senderClean = sender.trim().replace("(?i)^[A-Z]{2}-".toRegex(), "")
+                if (senderClean.length >= 3 && senderClean.all { it.isLetter() }) {
+                    beneficiary = senderClean
+                }
+            }
+            
+            if (beneficiary == "Unknown Beneficiary") {
+                val parenMatcher = Pattern.compile("\\(([^)]+)\\)").matcher(body)
+                if (parenMatcher.find()) {
+                    val candidate = parenMatcher.group(1)?.trim()
+                    if (candidate != null && candidate.length > 2 && 
+                        !candidate.contains("balance", ignoreCase = true) && 
+                        !candidate.contains("limit", ignoreCase = true) &&
+                        candidate.toLongOrNull() == null) {
+                        beneficiary = candidate
+                    }
+                }
+            }
+            
+            if (beneficiary == "Unknown Beneficiary") {
+                if (lowerBody.contains("yes bank") || lowerBody.contains("yesbank")) {
+                    val digitMatcher = Pattern.compile("(\\d{3,6})").matcher(accountId)
+                    val digits = if (digitMatcher.find()) (digitMatcher.group(1) ?: "3349") else "3349"
+                    beneficiary = "yesbank $digits card"
+                } else {
+                    val cleanAcc = standardizeAccountIdentifier(accountId)
+                    beneficiary = cleanAcc.lowercase(java.util.Locale.getDefault())
+                }
+            }
+            
+            beneficiary = cleanBeneficiary(beneficiary)
+            val category = mapCategory(beneficiary, body)
+            
             if (amt > 0.0) {
                 val smsUniqueId = "$timestamp-$amt-Reminder"
                 return TransactionSMS(
@@ -168,10 +244,11 @@ object TransactionParser {
                     amount = amt,
                     beneficiary = beneficiary,
                     type = "Reminder",
-                    category = "EMI",
-                    accountIdentifier = standardizeAccountIdentifier(accountId),
+                    category = category,
+                    accountIdentifier = accountId,
                     remainingBalance = null,
-                    rawSms = body
+                    rawSms = body,
+                    sender = finalSender
                 )
             }
         }
@@ -182,21 +259,21 @@ object TransactionParser {
             val accPattern = Pattern.compile("(?i)Dear\\s+([X0-9a-zA-Z]+)")
             val accMatcher = accPattern.matcher(body)
             if (accMatcher.find()) {
-                accountId = accMatcher.group(1).trim()
+                accountId = accMatcher.group(1)?.trim() ?: "XXXXXXXX7845"
             }
             
             var amt = 10162.0
             val amtPattern = Pattern.compile("(?i)Contribution\\s+of\\s+(?:Rs\\.?|INR|₹)?\\s*([0-9,]+)")
             val amtMatcher = amtPattern.matcher(body)
             if (amtMatcher.find()) {
-                amt = amtMatcher.group(1).replace(",", "").toDoubleOrNull() ?: 10162.0
+                amt = amtMatcher.group(1)?.replace(",", "")?.toDoubleOrNull() ?: 10162.0
             }
             
             var beneficiary = "TNMAS******9126"
             val benPattern = Pattern.compile("(?i)balance\\s+against\\s+([^\\s]+)")
             val benMatcher = benPattern.matcher(body)
             if (benMatcher.find()) {
-                beneficiary = benMatcher.group(1).trim().removeSuffix(",")
+                beneficiary = benMatcher.group(1)?.trim()?.removeSuffix(",") ?: "TNMAS******9126"
             }
             
             var remBal = 658438.0
@@ -204,9 +281,9 @@ object TransactionParser {
             val balMatcher = balPattern.matcher(body)
             if (balMatcher.find()) {
                 val cleanedBalStr = balMatcher.group(1)
-                    .replace(",", "")
-                    .replace("/-", "")
-                    .trim()
+                    ?.replace(",", "")
+                    ?.replace("/-", "")
+                    ?.trim() ?: ""
                 remBal = cleanedBalStr.toDoubleOrNull() ?: 658438.0
             }
             
@@ -220,11 +297,12 @@ object TransactionParser {
                 category = "Other",
                 accountIdentifier = accountId,
                 remainingBalance = remBal,
-                rawSms = body
+                rawSms = body,
+                sender = finalSender
             )
         }
 
-        // Filter out loan offers, disbursal offers, tenure confirmations, and promotional loan-setup alerts
+        // Filter out loan offers, disbursal offers, tenure confirmations, promotional loan-setup alerts, and declined/failed transactions
         if (lowerBody.contains("disbursal") || 
             lowerBody.contains("confirm your tenure") ||
             lowerBody.contains("confirm tenure") ||
@@ -241,6 +319,11 @@ object TransactionParser {
             lowerBody.contains("shall be debited") ||
             lowerBody.contains("will credited") ||
             lowerBody.contains("will debited") ||
+            lowerBody.contains("declined") ||
+            lowerBody.contains("decline") ||
+            lowerBody.contains("failed") ||
+            lowerBody.contains("unsuccessful") ||
+            lowerBody.contains("rejected") ||
             ((lowerBody.contains("pre-approved") || lowerBody.contains("pre approved")) && lowerBody.contains("loan"))
         ) {
             return null
@@ -369,8 +452,8 @@ object TransactionParser {
                 val patternFrom = Pattern.compile("(?i)from\\s+([^\\s]+?)(?=\\s|\\.|$)")
                 val matcherFrom = patternFrom.matcher(body)
                 if (matcherFrom.find()) {
-                    val candidate = matcherFrom.group(1).trim()
-                    if (!candidate.contains("hsbc", ignoreCase = true)) {
+                    val candidate = matcherFrom.group(1)?.trim() ?: ""
+                    if (candidate.isNotEmpty() && !candidate.contains("hsbc", ignoreCase = true)) {
                         beneficiary = candidate
                     }
                 }
@@ -454,7 +537,8 @@ object TransactionParser {
             category = category,
             accountIdentifier = accountIdentifier,
             remainingBalance = remainingBalance,
-            rawSms = body
+            rawSms = body,
+            sender = finalSender
         )
     }
 

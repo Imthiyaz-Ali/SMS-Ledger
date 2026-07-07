@@ -26,14 +26,21 @@ class SMSReceiver : BroadcastReceiver() {
                 Log.d("SMSReceiver", "Received SMS from $sender: $body")
 
                 // Only parse if it looks like transactional / bank message (alphanumeric sender usually, or contains bank keys)
-                val parsed = TransactionParser.parseSms(body, timestamp)
+                val parsed = TransactionParser.parseSms(body, timestamp, sender)
                 if (parsed != null) {
                     Log.i("SMSReceiver", "Successfully parsed SMS transaction: $parsed")
                     scope.launch {
                         try {
                             val db = AppDatabase.getDatabase(context)
-                            db.transactionDao().insertTransaction(parsed)
+                            val dao = db.transactionDao()
+                            dao.insertTransaction(parsed)
                             
+                            try {
+                                com.example.data.TransactionRepository(dao).reconcileCreditCardPayments()
+                            } catch (e: Exception) {
+                                Log.e("SMSReceiver", "Error reconciling credit card payments", e)
+                            }
+
                             // Trigger dynamic notify
                             if (parsed.type == "Reminder") {
                                 NotificationHelper.showDueReminderNotification(context, parsed, 2)

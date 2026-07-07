@@ -129,6 +129,34 @@ class ExampleUnitTest {
     
     assertNull(result)
   }
+
+  @Test
+  fun testYesBankCreditCardReminder() {
+    val sms = "Payment of Credit Card X3349 is due on 02/07/26. Min due Rs.200.00. Total Due Rs.5643.68. Pay before last date to avoid charges. Ignore if paid-YES BANK"
+    val result = TransactionParser.parseSms(sms, 1780850000000L)
+    
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("amount", 5643.68, it.amount)
+      assertParsedEquals("type", "Reminder", it.type)
+      assertParsedEquals("accountIdentifier", "YES X3349", it.accountIdentifier)
+      assertParsedEquals("beneficiary", "yesbank 3349 card", it.beneficiary)
+    }
+  }
+
+  @Test
+  fun testJioHomeReminder() {
+    val sms = "Dear Customer,\nBill dated 26-Jun-26 for your JioHome connection with JioFixedVoice Number +91918031594396 is due for payment today. Total amount payable is Rs. 706.82. \nPlease pay immediately to enjoy uninterrupted services.\nTo pay now, click www.jio.com/GetMyJio \nKindly ignore, if already paid.\nTeam JioHome"
+    val result = TransactionParser.parseSms(sms, 1780850000000L, "AD-JIOHOM")
+    
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("amount", 706.82, it.amount)
+      assertParsedEquals("type", "Reminder", it.type)
+      assertParsedEquals("beneficiary", "JioHome", it.beneficiary)
+      assertParsedEquals("category", "Bills", it.category)
+    }
+  }
 }
 
 

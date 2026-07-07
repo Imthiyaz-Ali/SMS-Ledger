@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.items
@@ -44,6 +45,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -52,12 +55,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.example.data.AccountBalance
@@ -99,12 +104,42 @@ data class MonthlyTrendData(
     val expenses: Double
 )
 
+sealed class CategoryIcon {
+    data class Vector(val imageVector: ImageVector) : CategoryIcon()
+    data class Character(val char: Char) : CategoryIcon()
+    object OthersSpecial : CategoryIcon()
+}
+
+@Composable
+fun OthersIcon(size: Dp, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .background(Color.Black, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize(0.75f)
+                .background(Color(0xFFE53935), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "!",
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = (size.value * 0.5f).sp
+            )
+        }
+    }
+}
+
 data class CategoryAgg(
     val category: String,
     val amount: Double,
     val count: Int,
     val color: Color,
-    val icon: String
+    val icon: CategoryIcon
 )
 
 data class MerchantAgg(
@@ -197,7 +232,7 @@ fun SMSLedgerApp(
     val currentMonthExpenses = remember(transactions) {
         transactions.filter { tx ->
             val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-            format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && !tx.category.equals("Transfer", ignoreCase = true)
+            format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
         }.sumOf { it.amount }
     }
 
@@ -298,6 +333,7 @@ fun SMSLedgerApp(
                             showCategorySheetForTransaction = tx
                         },
                         onNavigateToTab = { index -> currentScreenTabIndex = index },
+                        onUpdateReminderCompleted = { id, isCompleted -> viewModel.updateTransactionCompleted(id, isCompleted) },
                         onSimulateNotifications = {
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
                                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -330,7 +366,7 @@ fun SMSLedgerApp(
                                     timestamp = System.currentTimeMillis() - 3 * 3600 * 1000, // 3 hours ago
                                     type = "Reminder",
                                     category = "Bill Payment",
-                                    rawSms = "Your bill of Rs 7413.00 on ICICI card is due in 2 days. Kindly pay.",
+                                    rawSms = "Your bill of Rs 7413.00 on ICICI card is due in 2 days. Min due Rs.100.00. Kindly pay.",
                                     remainingBalance = null
                                 )
                                 com.example.utils.NotificationHelper.showTransactionNotification(context, sampleTx)
@@ -355,7 +391,7 @@ fun SMSLedgerApp(
                         }
                         val filteredExpenses = remember(filteredTxs, selectedFilterMonthLabel) {
                             if (selectedFilterMonthLabel != null) {
-                                filteredTxs.filter { it.type != "Credit" && it.type != "Reminder" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
+                                filteredTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
                             } else {
                                 currentMonthExpenses
                             }
@@ -657,10 +693,81 @@ fun DashboardMainScreen(
     onTransactionClick: (TransactionSMS) -> Unit,
     onCategoryClick: ((TransactionSMS) -> Unit)? = null,
     onNavigateToTab: (Int) -> Unit,
-    onSimulateNotifications: () -> Unit
+    onSimulateNotifications: () -> Unit,
+    onUpdateReminderCompleted: (Long, Boolean) -> Unit
 ) {
     var showAllAccountsSheet by remember { mutableStateOf(false) }
     var showAllRemindersSheet by remember { mutableStateOf(false) }
+    var showCompletedReminders by remember { mutableStateOf(false) }
+    var showPastRemindersSheet by remember { mutableStateOf(false) }
+
+    val (activeRemindersCurrent, completedRemindersCurrent, pastReminders) = remember(transactions) {
+        val todayCal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val currentYear = todayCal.get(Calendar.YEAR)
+        val currentMonth = todayCal.get(Calendar.MONTH)
+
+        val upcomingCal = Calendar.getInstance().apply {
+            add(Calendar.MONTH, 1)
+        }
+        val upcomingYear = upcomingCal.get(Calendar.YEAR)
+        val upcomingMonth = upcomingCal.get(Calendar.MONTH)
+
+        val allReminders = transactions.filter { it.type == "Reminder" }
+        val grouped = allReminders.groupBy { formatYesBankBeneficiary(it.beneficiary) }
+        
+        val activeCurrent = mutableListOf<TransactionSMS>()
+        val completedCurrent = mutableListOf<TransactionSMS>()
+        val past = mutableListOf<TransactionSMS>()
+        
+        for ((_, txList) in grouped) {
+            val sorted = txList.sortedByDescending { it.timestamp }
+            val latest = sorted.first()
+            
+            val dueCal = parseDueDate(latest.rawSms) ?: Calendar.getInstance().apply { timeInMillis = latest.timestamp }
+            val isCurrentOrUpcoming = (dueCal.get(Calendar.YEAR) == currentYear && dueCal.get(Calendar.MONTH) == currentMonth) || 
+                                      (dueCal.get(Calendar.YEAR) == upcomingYear && dueCal.get(Calendar.MONTH) == upcomingMonth)
+            val isGreaterEqualToday = !dueCal.before(todayCal)
+            
+            if (latest.isCompleted) {
+                if (isGreaterEqualToday) {
+                    completedCurrent.add(latest)
+                } else {
+                    past.add(latest)
+                }
+            } else {
+                if (isCurrentOrUpcoming) {
+                    activeCurrent.add(latest)
+                } else {
+                    past.add(latest)
+                }
+            }
+        }
+        Triple(activeCurrent, completedCurrent, past)
+    }
+
+    val topFive = remember(transactions) {
+        transactions.filter { it.type != "Reminder" }.take(5)
+    }
+
+    val pastRemindersGrouped = remember(pastReminders) {
+        pastReminders.groupBy { due ->
+            val dueCal = parseDueDate(due.rawSms) ?: Calendar.getInstance().apply { timeInMillis = due.timestamp }
+            val sdf = SimpleDateFormat("MMMM yy", Locale.US)
+            sdf.format(dueCal.time)
+        }.toList().sortedByDescending { (monthYearStr, _) ->
+            val sdf = SimpleDateFormat("MMMM yy", Locale.US)
+            try {
+                sdf.parse(monthYearStr)?.time ?: 0L
+            } catch (e: Exception) {
+                0L
+            }
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -915,121 +1022,111 @@ fun DashboardMainScreen(
             }
         } else {
             val previewAccounts = accountBalances.take(2)
-            items(previewAccounts) { accBalance ->
-                val cleanAccName = formatAccountDisplayName(accBalance.accountIdentifier)
-                val isApproved = approvedAccounts.contains(accBalance.accountIdentifier)
-                val balAmount = accBalance.remainingBalance
-                val lastSync = if (transactions.isNotEmpty()) "Just now" else "Standard offline"
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    previewAccounts.forEach { accBalance ->
+                        val cleanAccName = formatAccountDisplayName(accBalance.accountIdentifier)
+                        val isApproved = approvedAccounts.contains(accBalance.accountIdentifier)
+                        val balAmount = accBalance.remainingBalance
 
-                if (isApproved) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                        border = BorderStroke(1.dp, BorderOutline)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                            border = BorderStroke(1.dp, BorderOutline)
                         ) {
-                            Column {
-                                Text(
-                                    text = cleanAccName,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = PureWhiteText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Updated: $lastSync",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                    color = MutedGreyText
-                                )
-                            }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    text = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
-                                    color = MintLimePrimary
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Box(
+                            if (isApproved) {
+                                Column(
                                     modifier = Modifier
-                                        .size(6.dp)
-                                        .background(MintLimePrimary, CircleShape)
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                        border = BorderStroke(1.dp, BorderOutline)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = cleanAccName,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = PureWhiteText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "Track account?",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                    color = MutedGreyText
-                                )
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                IconButton(
-                                    onClick = { onRejectAccount(accBalance.accountIdentifier) },
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .background(Color(0xFFEF5350).copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                        .fillMaxWidth()
+                                        .padding(10.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Reject",
-                                        tint = Color(0xFFEF5350),
-                                        modifier = Modifier.size(16.dp)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = cleanAccName,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = PureWhiteText,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .background(MintLimePrimary, CircleShape)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
+                                        style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Black),
+                                        color = MintLimePrimary
                                     )
                                 }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                IconButton(
-                                    onClick = { onApproveAccount(accBalance.accountIdentifier) },
+                            } else {
+                                Column(
                                     modifier = Modifier
-                                        .size(32.dp)
-                                        .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                        .fillMaxWidth()
+                                        .padding(10.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Approve",
-                                        tint = MintLimePrimary,
-                                        modifier = Modifier.size(16.dp)
+                                    Text(
+                                        text = cleanAccName,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = PureWhiteText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Track?",
+                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                            color = MutedGreyText,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Row {
+                                            IconButton(
+                                                onClick = { onRejectAccount(accBalance.accountIdentifier) },
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .background(Color(0xFFEF5350).copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Reject",
+                                                    tint = Color(0xFFEF5350),
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            IconButton(
+                                                onClick = { onApproveAccount(accBalance.accountIdentifier) },
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = "Approve",
+                                                    tint = MintLimePrimary,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1063,11 +1160,7 @@ fun DashboardMainScreen(
             }
         }
 
-        val recurringDues = transactions.filter { tx ->
-            tx.type == "Reminder"
-        }.distinctBy { formatYesBankBeneficiary(it.beneficiary) }
-
-        if (recurringDues.isEmpty()) {
+        if (activeRemindersCurrent.isEmpty()) {
             item {
                 Card(
                     modifier = Modifier
@@ -1085,7 +1178,7 @@ fun DashboardMainScreen(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "No active reminders found.",
+                            text = "No active reminders found for current/upcoming month.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MutedGreyText
                         )
@@ -1093,66 +1186,245 @@ fun DashboardMainScreen(
                 }
             }
         } else {
-            val previewReminders = recurringDues.take(2)
-            items(previewReminders) { due ->
-                val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                val customLabel = if (due.type == "Reminder") {
-                    val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
-                    if (mStr.find()) {
-                        "Due by ${formatDueDateString(mStr.group(1).removeSuffix("."))}"
-                    } else {
-                        "Reminder Alert"
-                    }
-                } else {
-                    "Estimated cycle"
-                }
-
-                Card(
+            val previewReminders = activeRemindersCurrent.take(2)
+            item {
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .clickable { onTransactionClick(due) },
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                    border = BorderStroke(1.dp, BorderOutline)
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = dueLabel,
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = PureWhiteText,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = customLabel,
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                color = Color(0xFFFF8A80)
-                            )
+                    previewReminders.forEach { due ->
+                        val dueLabel = formatYesBankBeneficiary(due.beneficiary)
+                        val customLabel = if (due.type == "Reminder") {
+                            val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
+                            if (mStr.find()) {
+                                "Due: ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")}"
+                            } else {
+                                "Reminder Alert"
+                            }
+                        } else {
+                            "Est. cycle"
                         }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
-                                color = Color(0xFFFF8A80)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.NotificationsActive,
-                                contentDescription = "🔔",
-                                tint = Color(0xFFFF8A80),
-                                modifier = Modifier.size(14.dp)
-                            )
+
+                        Card(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable { onTransactionClick(due) },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                            border = BorderStroke(1.dp, BorderOutline)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = dueLabel,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = PureWhiteText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { onUpdateReminderCompleted(due.id, true) },
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Mark as completed",
+                                            tint = MintLimePrimary,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Black),
+                                    color = Color(0xFFFF8A80)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = customLabel,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                        color = MutedGreyText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.NotificationsActive,
+                                        contentDescription = "🔔",
+                                        tint = Color(0xFFFF8A80).copy(alpha = 0.8f),
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                }
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        if (completedRemindersCurrent.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showCompletedReminders = !showCompletedReminders }
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Completed",
+                            tint = MutedGreyText,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Completed Reminders (${completedRemindersCurrent.size})",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MutedGreyText
+                        )
+                    }
+                    Icon(
+                        imageVector = if (showCompletedReminders) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = "Toggle Completed Reminders",
+                        tint = MutedGreyText,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            if (showCompletedReminders) {
+                items(completedRemindersCurrent) { due ->
+                    val dueLabel = formatYesBankBeneficiary(due.beneficiary)
+                    val customLabel = if (due.type == "Reminder") {
+                        val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
+                        if (mStr.find()) {
+                            "Paid (Due was ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")})"
+                        } else {
+                            "Paid"
+                        }
+                    } else {
+                        "Completed"
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .alpha(0.6f)
+                            .padding(vertical = 4.dp)
+                            .clickable { onTransactionClick(due) },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                        border = BorderStroke(1.dp, BorderOutline)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                IconButton(
+                                    onClick = { onUpdateReminderCompleted(due.id, false) }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Undo,
+                                        contentDescription = "Mark as active",
+                                        tint = MutedGreyText,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = dueLabel,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            textDecoration = TextDecoration.LineThrough
+                                        ),
+                                        color = MutedGreyText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = customLabel,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                        color = MutedGreyText
+                                    )
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Black,
+                                        textDecoration = TextDecoration.LineThrough
+                                    ),
+                                    color = MutedGreyText
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (pastReminders.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showPastRemindersSheet = true }
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = "Past Reminders",
+                            tint = MutedGreyText,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Past Reminders (${pastReminders.size})",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MutedGreyText
+                        )
+                    }
+                    Text(
+                        text = "VIEW MORE",
+                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+                        color = MintLimePrimary,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
@@ -1182,7 +1454,6 @@ fun DashboardMainScreen(
             }
         }
 
-        val topFive = transactions.take(5)
         if (topFive.isNotEmpty()) {
             items(topFive) { tx ->
                 TransactionListItemRow(
@@ -1396,10 +1667,6 @@ fun DashboardMainScreen(
     }
 
     if (showAllRemindersSheet) {
-        val recurringDues = transactions.filter { tx ->
-            tx.type == "Reminder"
-        }.distinctBy { formatYesBankBeneficiary(it.beneficiary) }
-
         ModalBottomSheet(
             onDismissRequest = { showAllRemindersSheet = false },
             containerColor = LightCharcoalSurface,
@@ -1418,7 +1685,7 @@ fun DashboardMainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "All Active Reminders",
+                        text = "All Reminders",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = PureWhiteText
@@ -1438,21 +1705,31 @@ fun DashboardMainScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
-                    if (recurringDues.isEmpty()) {
+                    item {
+                        Text(
+                            text = "Active Reminders (${activeRemindersCurrent.size})",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MintLimePrimary,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    }
+
+                    if (activeRemindersCurrent.isEmpty()) {
                         item {
                             Text(
-                                text = "No active reminders found.",
+                                text = "No active reminders found for current/upcoming month.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MutedGreyText
+                                color = MutedGreyText,
+                                modifier = Modifier.padding(vertical = 8.dp)
                             )
                         }
                     } else {
-                        items(recurringDues) { due ->
+                        items(activeRemindersCurrent) { due ->
                             val dueLabel = formatYesBankBeneficiary(due.beneficiary)
                             val customLabel = if (due.type == "Reminder") {
                                 val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
                                 if (mStr.find()) {
-                                    "Due by ${formatDueDateString(mStr.group(1).removeSuffix("."))}"
+                                    "Due by ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")}"
                                 } else {
                                     "Reminder Alert"
                                 }
@@ -1478,18 +1755,34 @@ fun DashboardMainScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Column {
-                                        Text(
-                                            text = dueLabel,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = PureWhiteText
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = customLabel,
-                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                            color = Color(0xFFFF8A80)
-                                        )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        IconButton(
+                                            onClick = { onUpdateReminderCompleted(due.id, true) }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.CheckCircle,
+                                                contentDescription = "Mark completed",
+                                                tint = MintLimePrimary.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = dueLabel,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = PureWhiteText
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = customLabel,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                color = Color(0xFFFF8A80)
+                                            )
+                                        }
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text(
@@ -1504,6 +1797,341 @@ fun DashboardMainScreen(
                                             tint = Color(0xFFFF8A80),
                                             modifier = Modifier.size(14.dp)
                                         )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (completedRemindersCurrent.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Completed Reminders (${completedRemindersCurrent.size})",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MutedGreyText,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+
+                        items(completedRemindersCurrent) { due ->
+                            val dueLabel = formatYesBankBeneficiary(due.beneficiary)
+                            val customLabel = if (due.type == "Reminder") {
+                                val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
+                                if (mStr.find()) {
+                                    "Paid (Due was ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")})"
+                                } else {
+                                    "Paid"
+                                }
+                            } else {
+                                "Completed"
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .alpha(0.6f)
+                                    .clickable {
+                                        showAllRemindersSheet = false
+                                        onTransactionClick(due)
+                                    },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                                border = BorderStroke(1.dp, BorderOutline)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        IconButton(
+                                            onClick = { onUpdateReminderCompleted(due.id, false) }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Undo,
+                                                contentDescription = "Mark active",
+                                                tint = MutedGreyText,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = dueLabel,
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontWeight = FontWeight.Bold,
+                                                    textDecoration = TextDecoration.LineThrough
+                                                ),
+                                                color = MutedGreyText
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = customLabel,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                color = MutedGreyText
+                                            )
+                                        }
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontWeight = FontWeight.Black,
+                                                textDecoration = TextDecoration.LineThrough
+                                            ),
+                                            color = MutedGreyText
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (pastReminders.isNotEmpty()) {
+                        item {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Past Reminders (${pastReminders.size})",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MutedGreyText,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+
+                        pastRemindersGrouped.forEach { (monthYearStr, dues) ->
+                            item {
+                                Text(
+                                    text = monthYearStr,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MintLimePrimary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp, start = 4.dp)
+                                )
+                            }
+
+                            items(dues) { due ->
+                                val dueLabel = formatYesBankBeneficiary(due.beneficiary)
+                                val customLabel = if (due.type == "Reminder") {
+                                    val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
+                                    if (mStr.find()) {
+                                        "Paid (Due was ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")})"
+                                    } else {
+                                        "Paid"
+                                    }
+                                } else {
+                                    "Completed"
+                                }
+
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .alpha(0.6f)
+                                        .clickable {
+                                            showAllRemindersSheet = false
+                                            onTransactionClick(due)
+                                        },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                                    border = BorderStroke(1.dp, BorderOutline)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(14.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            IconButton(
+                                                onClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) }
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (due.isCompleted) Icons.Default.Undo else Icons.Default.CheckCircle,
+                                                    contentDescription = "Toggle status",
+                                                    tint = MutedGreyText,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = dueLabel,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                                    ),
+                                                    color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = customLabel,
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                    color = MutedGreyText
+                                                )
+                                            }
+                                        }
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
+                                                style = MaterialTheme.typography.titleMedium.copy(
+                                                    fontWeight = FontWeight.Black,
+                                                    textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                                ),
+                                                color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+
+    if (showPastRemindersSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showPastRemindersSheet = false },
+            containerColor = LightCharcoalSurface,
+            contentColor = PureWhiteText,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .navigationBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Past Reminders",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = PureWhiteText
+                    )
+                    IconButton(onClick = { showPastRemindersSheet = false }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = PureWhiteText
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    if (pastRemindersGrouped.isEmpty()) {
+                        item {
+                            Text(
+                                text = "No past reminders found.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MutedGreyText,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                    } else {
+                        pastRemindersGrouped.forEach { (monthYearStr, dues) ->
+                            item {
+                                Text(
+                                    text = monthYearStr,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MintLimePrimary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp, start = 4.dp)
+                                )
+                            }
+
+                            items(dues) { due ->
+                                val dueLabel = formatYesBankBeneficiary(due.beneficiary)
+                                val customLabel = if (due.type == "Reminder") {
+                                    val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
+                                    if (mStr.find()) {
+                                        "Paid (Due was ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")})"
+                                    } else {
+                                        "Paid"
+                                    }
+                                } else {
+                                    "Completed"
+                                }
+
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .alpha(0.6f)
+                                        .clickable {
+                                            showPastRemindersSheet = false
+                                            onTransactionClick(due)
+                                        },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
+                                    border = BorderStroke(1.dp, BorderOutline)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(14.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            IconButton(
+                                                onClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) }
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (due.isCompleted) Icons.Default.Undo else Icons.Default.CheckCircle,
+                                                    contentDescription = "Toggle status",
+                                                    tint = MutedGreyText,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = dueLabel,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontWeight = FontWeight.Bold,
+                                                        textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                                    ),
+                                                    color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = customLabel,
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                    color = MutedGreyText
+                                                )
+                                            }
+                                        }
+                                        Column(horizontalAlignment = Alignment.End) {
+                                            Text(
+                                                text = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
+                                                style = MaterialTheme.typography.titleMedium.copy(
+                                                    fontWeight = FontWeight.Black,
+                                                    textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                                                ),
+                                                color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1667,12 +2295,15 @@ fun AnalysisDetailedScreen(
         ) {
             when (subTabState) {
                 0 -> { // Transactions list
-                    if (transactions.isNotEmpty()) {
+                    val nonReminderTransactions = remember(transactions) {
+                        transactions.filter { it.type != "Reminder" }
+                    }
+                    if (nonReminderTransactions.isNotEmpty()) {
                         LazyColumn(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(bottom = 16.dp)
                         ) {
-                            items(transactions) { tx ->
+                            items(nonReminderTransactions) { tx ->
                                 TransactionListItemRow(
                                     tx = tx,
                                     onClick = { onTransactionClick(tx) },
@@ -1812,7 +2443,7 @@ fun CategoryCardView(cat: CategoryAgg) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Large circular colored category emoji card
+                // Large circular colored category icon card
                 Box(
                     modifier = Modifier
                         .size(42.dp)
@@ -1820,7 +2451,27 @@ fun CategoryCardView(cat: CategoryAgg) {
                         .border(1.dp, cat.color.copy(alpha = 0.3f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(text = cat.icon, fontSize = 20.sp)
+                    when (val icon = cat.icon) {
+                        is CategoryIcon.Vector -> {
+                            Icon(
+                                imageVector = icon.imageVector,
+                                contentDescription = cat.category,
+                                tint = cat.color,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        is CategoryIcon.Character -> {
+                            Text(
+                                text = icon.char.toString(),
+                                color = cat.color,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        }
+                        is CategoryIcon.OthersSpecial -> {
+                            OthersIcon(size = 20.dp)
+                        }
+                    }
                 }
 
                 Column {
@@ -1931,7 +2582,7 @@ fun AdvancedTrendsScreen(
 
     // Dynamic metrics calculated for the selected month
     val selectedSpends = remember(selectedMonthTransactions) {
-        selectedMonthTransactions.filter { it.type != "Credit" && it.type != "Reminder" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
+        selectedMonthTransactions.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
     }
     val selectedIncome = remember(selectedMonthTransactions) {
         selectedMonthTransactions.filter { it.type == "Credit" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
@@ -2528,7 +3179,27 @@ fun TransactionListItemRow(
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                Text(text = icon, fontSize = 20.sp)
+                when (icon) {
+                    is CategoryIcon.Vector -> {
+                        Icon(
+                            imageVector = icon.imageVector,
+                            contentDescription = tx.category,
+                            tint = color,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    is CategoryIcon.Character -> {
+                        Text(
+                            text = icon.char.toString(),
+                            color = color,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                    }
+                    is CategoryIcon.OthersSpecial -> {
+                        OthersIcon(size = 20.dp)
+                    }
+                }
             }
 
             Column(modifier = Modifier.weight(1f)) {
@@ -2697,7 +3368,7 @@ fun ParsedTransactionDetailSheet(
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     val typeValue = if (isSheetTxTransfer) "Transfer" else transaction.type
-                    val typeColor = if (isSheetTxTransfer) Color(0xFFD0BCFF) else if (transaction.type == "Credit") Color(0xFF66BB6A) else if (transaction.type == "Reminder") Color(0xFFFF8A80) else Color(0xFFFF5252)
+                    val typeColor = if (isSheetTxTransfer) Color(0xFFD0BCFF) else if (transaction.type == "Credit") Color(0xFF66BB6A) else if (transaction.type == "Reminder") Color(0xFFFF8A80) else if (transaction.type == "Credit Card Payment") Color(0xFFFFB74D) else Color(0xFFFF5252)
                     Text(
                         text = typeValue,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
@@ -2735,7 +3406,27 @@ fun ParsedTransactionDetailSheet(
                             .background(catAsset.second.copy(alpha = 0.15f), CircleShape),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(catAsset.first, fontSize = 12.sp)
+                        when (val icon = catAsset.first) {
+                            is CategoryIcon.Vector -> {
+                                Icon(
+                                    imageVector = icon.imageVector,
+                                    contentDescription = transaction.category,
+                                    tint = catAsset.second,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                            is CategoryIcon.Character -> {
+                                Text(
+                                    text = icon.char.toString(),
+                                    color = catAsset.second,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            is CategoryIcon.OthersSpecial -> {
+                                OthersIcon(size = 14.dp)
+                            }
+                        }
                     }
                     Text(
                         text = transaction.category,
@@ -2774,7 +3465,7 @@ fun ParsedTransactionDetailSheet(
                 .padding(14.dp)
         ) {
             Text(
-                text = transaction.rawSms,
+                text = "Sender: ${transaction.sender}\n\n${transaction.rawSms}",
                 style = MaterialTheme.typography.bodySmall.copy(
                     fontFamily = FontFamily.Monospace,
                     lineHeight = 18.sp
@@ -2813,30 +3504,30 @@ fun SheetDetailRow(
 }
 
 // Dynamic Assets helper mapping categories to corresponding icons and color tones
-fun getCategoryAsset(category: String): Pair<String, Color> {
+fun getCategoryAsset(category: String): Pair<CategoryIcon, Color> {
     return when (category) {
-        "Bills" -> "🧾" to Color(0xFF4CAF50)          // Green
-        "EMI" -> "📊" to Color(0xFF9E9E9E)            // Grey
-        "Entertainment" -> "⭐" to Color(0xFF3F51B5)    // Indigo Blue
-        "Food & Drinks" -> "🍽️" to Color(0xFFE91E63)   // Pink/Magenta
-        "Fuel" -> "⛽" to Color(0xFFFF9800)           // Amber Orange
-        "Groceries" -> "🧺" to Color(0xFF8BC34A)      // Light Green
-        "Health" -> "💝" to Color(0xFFFFB300)         // Yellow/Gold
-        "Investment" -> "🐖" to Color(0xFF607D8B)     // Blue Grey/Slate
-        "Other" -> "💬" to Color(0xFFFF9800)          // Orange
-        "Shopping" -> "🛒" to Color(0xFF00ACC1)       // Teal
-        "Transfer" -> "↔️" to Color(0xFF9C27B0)       // Purple
-        "Travel" -> "🧳" to Color(0xFF673AB7)         // Violet
-        "Rent" -> "R" to Color(0xFF4CAF50)            // Green (white R inside green bubble)
-        "Cash Withdrawl", "Cash Withdrawal" -> "💵" to Color(0xFFFF9800) // Money/Cash Icon (Amber Orange)
+        "Bills" -> CategoryIcon.Vector(Icons.Default.ReceiptLong) to Color(0xFF4CAF50)          // Green
+        "EMI" -> CategoryIcon.Vector(Icons.Default.AccountBalance) to Color(0xFF9E9E9E)        // Grey
+        "Entertainment" -> CategoryIcon.Vector(Icons.Default.Celebration) to Color(0xFF3F51B5)  // Indigo Blue
+        "Food & Drinks" -> CategoryIcon.Vector(Icons.Default.Restaurant) to Color(0xFFE91E63)   // Pink/Magenta
+        "Fuel" -> CategoryIcon.Vector(Icons.Default.LocalGasStation) to Color(0xFFFF9800)       // Amber Orange
+        "Groceries" -> CategoryIcon.Vector(Icons.Default.LocalGroceryStore) to Color(0xFF8BC34A)  // Light Green
+        "Health" -> CategoryIcon.Vector(Icons.Default.MedicalServices) to Color(0xFFFFB300)     // Yellow/Gold
+        "Investment" -> CategoryIcon.Vector(Icons.AutoMirrored.Filled.TrendingUp) to Color(0xFF607D8B) // Blue Grey/Slate (Modern financial trend up icon)
+        "Other", "Others" -> CategoryIcon.OthersSpecial to Color(0xFFE53935)                  // Red exclamation with black background
+        "Shopping" -> CategoryIcon.Vector(Icons.Default.ShoppingBag) to Color(0xFF00ACC1)       // Teal
+        "Transfer" -> CategoryIcon.Vector(Icons.Default.SwapHoriz) to Color(0xFF9C27B0)         // Purple
+        "Travel" -> CategoryIcon.Vector(Icons.Default.Flight) to Color(0xFF673AB7)              // Violet
+        "Rent" -> CategoryIcon.Vector(Icons.Default.HomeWork) to Color(0xFF4CAF50)              // Green
+        "Cash Withdrawl", "Cash Withdrawal" -> CategoryIcon.Vector(Icons.Default.Atm) to Color(0xFFFF9800) // Money/Cash Icon (Amber Orange)
         else -> {
             val trimmed = category.trim()
             val firstChar = if (trimmed.isNotEmpty()) {
-                trimmed.first().uppercaseChar().toString()
+                trimmed.first().uppercaseChar()
             } else {
-                "❓"
+                '?'
             }
-            firstChar to Color(0xFFAB47BC)
+            CategoryIcon.Character(firstChar) to Color(0xFFAB47BC)
         }
     }
 }
@@ -2849,7 +3540,7 @@ fun CategoryGridItem(
 ) {
     val asset = getCategoryAsset(category)
     val color = asset.second
-    val iconStr = asset.first
+    val icon = asset.first
 
     Column(
         modifier = Modifier
@@ -2869,7 +3560,10 @@ fun CategoryGridItem(
         Box(
             modifier = Modifier
                 .size(56.dp)
-                .background(color, CircleShape)
+                .background(
+                    if (icon is CategoryIcon.OthersSpecial) Color.Transparent else color,
+                    CircleShape
+                )
                 .border(
                     width = if (isSelected) 2.dp else 0.dp,
                     color = if (isSelected) Color.White else Color.Transparent,
@@ -2877,12 +3571,27 @@ fun CategoryGridItem(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = iconStr,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = if (iconStr.length == 1) 22.sp else 24.sp
-            )
+            when (icon) {
+                is CategoryIcon.Vector -> {
+                    Icon(
+                        imageVector = icon.imageVector,
+                        contentDescription = category,
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                is CategoryIcon.Character -> {
+                    Text(
+                        text = icon.char.toString(),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 22.sp
+                    )
+                }
+                is CategoryIcon.OthersSpecial -> {
+                    OthersIcon(size = 56.dp)
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(6.dp))
@@ -3162,7 +3871,7 @@ fun getCategorySpendList(transactions: List<TransactionSMS>): List<CategoryAgg> 
 
     val currentSpends = transactions.filter { tx ->
         val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder"
+        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment"
     }
 
     val grouped = currentSpends.groupBy { it.category }
@@ -3184,7 +3893,7 @@ fun getMerchantSpendList(transactions: List<TransactionSMS>): List<MerchantAgg> 
 
     val currentSpends = transactions.filter { tx ->
         val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder"
+        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment"
     }
 
     val grouped = currentSpends.groupBy { it.beneficiary }
@@ -3252,7 +3961,7 @@ fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendDa
     }
 
     for (tx in transactions) {
-        if (tx.type == "Reminder") continue
+        if (tx.type == "Reminder" || tx.type == "Credit Card Payment") continue
         if (tx.category.equals("Transfer", ignoreCase = true)) continue
         val txCal = Calendar.getInstance().apply { timeInMillis = tx.timestamp }
         val m = format.format(txCal.time)
@@ -3355,6 +4064,42 @@ fun formatDueDateString(rawDate: String): String {
         }
     }
     return rawDate
+}
+
+fun parseDueDate(rawSms: String): Calendar? {
+    val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(rawSms)
+    if (!mStr.find()) return null
+    val rawDate = (mStr.group(1)?.removeSuffix(".") ?: "").trim().replace("\\", "/").replace("-", "/")
+    val parts = rawDate.split("/")
+    if (parts.size >= 3) {
+        val day = parts[0].toIntOrNull() ?: return null
+        val monthStr = parts[1]
+        var year = parts[2].toIntOrNull() ?: return null
+        if (year < 100) year += 2000
+        
+        val month = monthStr.toIntOrNull()
+        if (month != null) {
+            if (month in 1..12) {
+                val cal = Calendar.getInstance()
+                cal.clear()
+                cal.set(year, month - 1, day)
+                return cal
+            }
+        } else {
+            val months = listOf(
+                "jan", "feb", "mar", "apr", "may", "jun",
+                "jul", "aug", "sep", "oct", "nov", "dec"
+            )
+            val index = months.indexOf(monthStr.lowercase(Locale.US).take(3))
+            if (index != -1) {
+                val cal = Calendar.getInstance()
+                cal.clear()
+                cal.set(year, index, day)
+                return cal
+            }
+        }
+    }
+    return null
 }
 
 @Composable

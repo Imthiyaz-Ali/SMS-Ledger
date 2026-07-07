@@ -49,7 +49,9 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
         }
 
         val resolvedTx = resolveRemainingBalance(transaction)
-        return transactionDao.insertTransaction(resolvedTx)
+        val id = transactionDao.insertTransaction(resolvedTx)
+        reconcileCreditCardPayments()
+        return id
     }
 
     suspend fun insertAll(transactions: List<TransactionSMS>) {
@@ -143,6 +145,7 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
         if (toInsert.isNotEmpty()) {
             transactionDao.insertTransactions(toInsert)
         }
+        reconcileCreditCardPayments()
     }
 
     private suspend fun resolveRemainingBalance(transaction: TransactionSMS): TransactionSMS {
@@ -169,11 +172,48 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
         transactionDao.updateTransactionType(id, type)
     }
 
+    suspend fun updateTransactionCompleted(id: Long, isCompleted: Boolean) {
+        transactionDao.updateTransactionCompleted(id, isCompleted)
+    }
+
     suspend fun updatePastTransactionsCategory(beneficiary: String, timestamp: Long, category: String) {
         transactionDao.updatePastTransactionsCategory(beneficiary, timestamp, category)
     }
 
     suspend fun deleteAll() {
         transactionDao.deleteAll()
+    }
+
+    suspend fun reconcileCreditCardPayments() {
+        try {
+            val list = transactionDao.getAllTransactionsList()
+            val reminders = list.filter { tx ->
+                tx.type == "Reminder" && !tx.isCompleted && (
+                    tx.rawSms.lowercase().contains("card") ||
+                    tx.rawSms.lowercase().contains("credit") ||
+                    tx.rawSms.lowercase().contains("cc") ||
+                    tx.beneficiary.lowercase().contains("card") ||
+                    tx.beneficiary.lowercase().contains("credit") ||
+                    tx.beneficiary.lowercase().contains("cc")
+                )
+            }
+            val debits = list.filter { tx -> tx.type == "Debit" }
+            for (reminder in reminders) {
+                val matchingDebit = debits.find { debit -> debit.amount == reminder.amount }
+                if (matchingDebit != null) {
+                    // Update debit to "Credit Card Payment"
+                    val updatedDebit = matchingDebit.copy(type = "Credit Card Payment")
+                    transactionDao.deleteTransaction(matchingDebit)
+                    transactionDao.insertTransaction(updatedDebit)
+                    
+                    // Update reminder to isCompleted = true
+                    val updatedReminder = reminder.copy(isCompleted = true)
+                    transactionDao.deleteTransaction(reminder)
+                    transactionDao.insertTransaction(updatedReminder)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }

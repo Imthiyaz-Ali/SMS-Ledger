@@ -18,7 +18,8 @@ object SMSInboxReader {
 
         val projection = arrayOf(
             Telephony.Sms.Inbox.BODY,
-            Telephony.Sms.Inbox.DATE
+            Telephony.Sms.Inbox.DATE,
+            Telephony.Sms.Inbox.ADDRESS
         )
 
         try {
@@ -33,12 +34,14 @@ object SMSInboxReader {
             cursor?.use { c ->
                 val bodyIndex = c.getColumnIndexOrThrow(Telephony.Sms.Inbox.BODY)
                 val dateIndex = c.getColumnIndexOrThrow(Telephony.Sms.Inbox.DATE)
+                val addressIndex = c.getColumnIndexOrThrow(Telephony.Sms.Inbox.ADDRESS)
 
                 while (c.moveToNext()) {
                     val body = c.getString(bodyIndex) ?: continue
                     val date = c.getLong(dateIndex)
+                    val sender = c.getString(addressIndex) ?: "Unknown"
 
-                    val parsed = TransactionParser.parseSms(body, date)
+                    val parsed = TransactionParser.parseSms(body, date, sender)
                     if (parsed != null) {
                         transactions.add(parsed)
                     }

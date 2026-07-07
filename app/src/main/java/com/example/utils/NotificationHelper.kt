@@ -192,7 +192,7 @@ object NotificationHelper {
         val matcher = numberPattern.matcher(accountIdentifier)
         val digits = if (matcher.find()) {
             val fullMatch = matcher.group(1)
-            fullMatch.takeLast(4)
+            fullMatch?.takeLast(4) ?: "XXXX"
         } else {
             "XXXX"
         }

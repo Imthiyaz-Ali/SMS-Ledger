@@ -161,6 +161,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Updates the completion status of a specific transaction.
+     */
+    fun updateTransactionCompleted(id: Long, isCompleted: Boolean) {
+        viewModelScope.launch {
+            repository.updateTransactionCompleted(id, isCompleted)
+        }
+    }
+
+    /**
      * Updates category for all past transactions with the same case-insensitive beneficiary.
      */
     fun updatePastTransactionsCategory(beneficiary: String, timestamp: Long, category: String) {
@@ -197,7 +206,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Pair("Your HSBC Acc XXXXXX8006 is credited for INR 16000.00 on 28-May-26 from 9885900594@axl. UPI Ref No 424240082164", 17 * oneDayMs),
                 Pair("Alert: Your YES Bank Acc X3349 has been debited by INR 8,000.00 for Amazon shopping. Avl Lmt INR 38,000.00.", 25 * oneDayMs),
                 Pair("ICICI Bank Acc XX555 debited Rs. 4,900.00 on 12-May-26 NFS*CASH WDL*. Avb Bal Rs. 26,507.01. To dispute Call 18002662 or SMS BLOCK 555 to 9215676766 .", 28 * oneDayMs),
-                Pair("EMI of Rs 48663 for ICICI Bank Personal Loan XX1565 is due on 05-May-26. Please maintain sufficient funds in your linked Account XX4555 to avoid 5% per annum penal charges and Rs 500 bounce charges. EMI will be debited on holidays too. Access your loan related services on iMobile at icici.co/ICICIT/k/DUvOd7lne0G", 30 * oneDayMs),
+                Pair("EMI of Rs 48663 for ICICI Bank Personal Loan XX1565 is due on 05-May-26. Min due Rs.48663.00. Please maintain sufficient funds in your linked Account XX4555 to avoid 5% per annum penal charges and Rs 500 bounce charges. EMI will be debited on holidays too. Access your loan related services on iMobile at icici.co/ICICIT/k/DUvOd7lne0G", 30 * oneDayMs),
                 Pair("Rs. 3000.00 debited from HDFC Bank A/c *5056 to Landlord. Avl Bal Rs 15,000.00.", 32 * oneDayMs),
                 Pair("Credited with Rs 48,000.00 (salary credited) into YES X3349. Avl Bal Rs 55,000.00.", 36 * oneDayMs),
                 
@@ -240,20 +249,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val list = dao.getAllTransactionsList()
                 for (tx in list) {
                     val lowerBody = tx.rawSms.lowercase()
-                    if (lowerBody.contains("x3349") && lowerBody.contains("is due") && (lowerBody.contains("5672") || lowerBody.contains("total due"))) {
-                        if (tx.type != "Reminder" || tx.amount != 5672.0 || tx.beneficiary != "yesbank 3349 card" || tx.accountIdentifier != "YES 3349") {
-                            val updated = tx.copy(
-                                type = "Reminder",
-                                category = "EMI",
-                                amount = 5672.0,
-                                beneficiary = "yesbank 3349 card",
-                                accountIdentifier = "YES 3349"
-                            )
-                            dao.deleteTransaction(tx)
-                            dao.insertTransaction(updated)
+                    if (lowerBody.contains("x3349") && lowerBody.contains("is due") && (lowerBody.contains("total due") || lowerBody.contains("min due"))) {
+                        val parsed = TransactionParser.parseSms(tx.rawSms, tx.timestamp)
+                        if (parsed != null && parsed.type == "Reminder") {
+                            if (tx.type != "Reminder" || tx.amount != parsed.amount || tx.beneficiary != parsed.beneficiary || tx.accountIdentifier != parsed.accountIdentifier) {
+                                val updated = tx.copy(
+                                    type = "Reminder",
+                                    category = "EMI",
+                                    amount = parsed.amount,
+                                    beneficiary = parsed.beneficiary,
+                                    accountIdentifier = parsed.accountIdentifier
+                                )
+                                dao.deleteTransaction(tx)
+                                dao.insertTransaction(updated)
+                            }
                         }
                     }
                 }
+                repository.reconcileCreditCardPayments()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
