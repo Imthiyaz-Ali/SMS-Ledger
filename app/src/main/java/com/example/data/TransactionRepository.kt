@@ -2,22 +2,77 @@ package com.example.data
 
 import kotlinx.coroutines.flow.Flow
 
-class TransactionRepository(private val transactionDao: TransactionDao) {
+class TransactionRepository(
+    private val transactionDao: TransactionDao,
+    private val categoryMappingDao: CategoryMappingDao? = null,
+    private val customCategoryDao: CustomCategoryDao? = null
+) {
 
     val allTransactions: Flow<List<TransactionSMS>> = transactionDao.getAllTransactions()
     
     val accountBalances: Flow<List<AccountBalance>> = transactionDao.getLatestAccountBalances()
 
+    val customCategories: Flow<List<String>> = customCategoryDao?.getAllCustomCategoriesFlow() 
+        ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
     fun getMonthlySpendsByCategory(startOfMonth: Long, endOfMonth: Long): Flow<List<CategorySpend>> {
         return transactionDao.getMonthlySpendsByCategory(startOfMonth, endOfMonth)
     }
 
+    suspend fun saveCustomCategory(category: String) {
+        val clean = category.trim()
+        if (clean.isNotBlank()) {
+            customCategoryDao?.insertCustomCategory(CustomCategory(clean))
+        }
+    }
+
+    suspend fun applyCategoryMapping(transaction: TransactionSMS): TransactionSMS {
+        if (categoryMappingDao == null || transaction.beneficiary.isBlank() || transaction.beneficiary.equals("Unknown Beneficiary", ignoreCase = true)) {
+            return transaction
+        }
+        val mappings = categoryMappingDao.getAllMappings()
+        if (mappings.isEmpty()) return transaction
+
+        val cleanBen = transaction.beneficiary.trim().lowercase()
+
+        // 1. Exact match
+        val exactMatch = mappings.find { it.beneficiary.trim().lowercase() == cleanBen }
+        if (exactMatch != null) {
+            return transaction.copy(category = exactMatch.category)
+        }
+
+        // 2. Partial match (e.g. if mapped rule is "zomato" and new tx is "zomato india")
+        val partialMatch = mappings.find { mapping ->
+            val mapped = mapping.beneficiary.trim().lowercase()
+            mapped.isNotBlank() && (cleanBen.contains(mapped) || mapped.contains(cleanBen))
+        }
+        if (partialMatch != null) {
+            return transaction.copy(category = partialMatch.category)
+        }
+
+        return transaction
+    }
+
+    suspend fun saveCategoryMapping(beneficiary: String, category: String) {
+        val cleanCat = category.trim()
+        if (categoryMappingDao != null && beneficiary.isNotBlank() && !beneficiary.equals("Unknown Beneficiary", ignoreCase = true)) {
+            categoryMappingDao.insertOrUpdateMapping(
+                CategoryMapping(
+                    beneficiary = beneficiary.trim().lowercase(),
+                    category = cleanCat
+                )
+            )
+        }
+        saveCustomCategory(cleanCat)
+    }
+
     suspend fun insert(transaction: TransactionSMS): Long {
+        var mappedTx = applyCategoryMapping(transaction)
         // Check for duplicates within 1 hour
         val duplicates = transactionDao.findDuplicateTransactions(
-            amount = transaction.amount,
-            accountIdentifier = transaction.accountIdentifier,
-            timestamp = transaction.timestamp,
+            amount = mappedTx.amount,
+            accountIdentifier = mappedTx.accountIdentifier,
+            timestamp = mappedTx.timestamp,
             timeWindow = 3600000L // 1 hour window
         )
         
@@ -25,15 +80,31 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
         var resultId = 0L
 
         for (existing in duplicates) {
-            val isSimilarBeneficiary = existing.beneficiary.equals(transaction.beneficiary, ignoreCase = true) ||
-                    existing.beneficiary.lowercase().contains(transaction.beneficiary.lowercase()) ||
-                    transaction.beneficiary.lowercase().contains(existing.beneficiary.lowercase()) ||
+            val isSimilarBeneficiary = existing.beneficiary.equals(mappedTx.beneficiary, ignoreCase = true) ||
+                    existing.beneficiary.lowercase().contains(mappedTx.beneficiary.lowercase()) ||
+                    mappedTx.beneficiary.lowercase().contains(existing.beneficiary.lowercase()) ||
                     existing.beneficiary.equals("Unknown", ignoreCase = true) ||
-                    transaction.beneficiary.equals("Unknown", ignoreCase = true)
+                    mappedTx.beneficiary.equals("Unknown", ignoreCase = true)
                     
             if (isSimilarBeneficiary) {
-                if (existing.rawSms.length >= transaction.rawSms.length) {
-                    // Existing is better or same, do not insert new one
+                // Preserve user's explicit custom category/type if present on existing
+                val preservedCategory = if (existing.category.isNotBlank() && existing.category != "Other") existing.category else mappedTx.category
+                val preservedType = if (existing.type.isNotBlank() && existing.type != "Debit" && existing.type != "Credit") existing.type else mappedTx.type
+                val preservedCompleted = existing.isCompleted || mappedTx.isCompleted
+
+                mappedTx = mappedTx.copy(
+                    category = preservedCategory,
+                    type = preservedType,
+                    isCompleted = preservedCompleted
+                )
+
+                if (existing.rawSms.length >= mappedTx.rawSms.length) {
+                    // Existing is better or same, update existing if category was merged
+                    if (existing.category != mappedTx.category || existing.type != mappedTx.type || existing.isCompleted != mappedTx.isCompleted) {
+                        transactionDao.updateTransactionCategory(existing.id, mappedTx.category)
+                        transactionDao.updateTransactionType(existing.id, mappedTx.type)
+                        transactionDao.updateTransactionCompleted(existing.id, mappedTx.isCompleted)
+                    }
                     shouldInsert = false
                     resultId = existing.id
                     break
@@ -48,7 +119,7 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
             return resultId
         }
 
-        val resolvedTx = resolveRemainingBalance(transaction)
+        val resolvedTx = resolveRemainingBalance(mappedTx)
         val id = transactionDao.insertTransaction(resolvedTx)
         reconcileCreditCardPayments()
         return id
@@ -56,6 +127,9 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
 
     suspend fun insertAll(transactions: List<TransactionSMS>) {
         if (transactions.isEmpty()) return
+
+        // 0. Apply user category mappings to all incoming transactions
+        val mappedTransactions = transactions.map { applyCategoryMapping(it) }
 
         // 1. Fetch all existing transactions once to do in-memory duplicate checks
         val existingList = transactionDao.getAllTransactionsList()
@@ -66,7 +140,7 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
         val batchInserted = mutableListOf<TransactionSMS>()
         
         // 2. Sort transactions chronologically (ascending) for running balance calculation
-        val chronological = transactions.sortedBy { it.timestamp }
+        val chronological = mappedTransactions.sortedBy { it.timestamp }
         
         val lastKnownBalances = mutableMapOf<String, Double>()
         
@@ -81,15 +155,33 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
             }
             
             var shouldInsert = true
+            var currentTx = tx
+
             for (existing in duplicates) {
-                val isSimilarBeneficiary = existing.beneficiary.equals(tx.beneficiary, ignoreCase = true) ||
-                        existing.beneficiary.lowercase().contains(tx.beneficiary.lowercase()) ||
-                        tx.beneficiary.lowercase().contains(existing.beneficiary.lowercase()) ||
+                val isSimilarBeneficiary = existing.beneficiary.equals(currentTx.beneficiary, ignoreCase = true) ||
+                        existing.beneficiary.lowercase().contains(currentTx.beneficiary.lowercase()) ||
+                        currentTx.beneficiary.lowercase().contains(existing.beneficiary.lowercase()) ||
                         existing.beneficiary.equals("Unknown", ignoreCase = true) ||
-                        tx.beneficiary.equals("Unknown", ignoreCase = true)
+                        currentTx.beneficiary.equals("Unknown", ignoreCase = true)
                         
                 if (isSimilarBeneficiary) {
-                    if (existing.rawSms.length >= tx.rawSms.length) {
+                    // Preserve user's custom category, type, and completion status
+                    val preservedCategory = if (existing.category.isNotBlank() && existing.category != "Other") existing.category else currentTx.category
+                    val preservedType = if (existing.type.isNotBlank() && existing.type != "Debit" && existing.type != "Credit") existing.type else currentTx.type
+                    val preservedCompleted = existing.isCompleted || currentTx.isCompleted
+
+                    currentTx = currentTx.copy(
+                        category = preservedCategory,
+                        type = preservedType,
+                        isCompleted = preservedCompleted
+                    )
+
+                    if (existing.rawSms.length >= currentTx.rawSms.length) {
+                        if (existing.id != 0L && (existing.category != currentTx.category || existing.type != currentTx.type || existing.isCompleted != currentTx.isCompleted)) {
+                            transactionDao.updateTransactionCategory(existing.id, currentTx.category)
+                            transactionDao.updateTransactionType(existing.id, currentTx.type)
+                            transactionDao.updateTransactionCompleted(existing.id, currentTx.isCompleted)
+                        }
                         shouldInsert = false
                         break
                     } else {
@@ -106,27 +198,27 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
             
             if (shouldInsert) {
                 // Resolve balance for this tx
-                val resolvedTx = if (tx.remainingBalance != null || tx.type == "Reminder") {
-                    if (tx.remainingBalance != null) {
-                        lastKnownBalances[tx.accountIdentifier] = tx.remainingBalance
+                val resolvedTx = if (currentTx.remainingBalance != null || currentTx.type == "Reminder") {
+                    if (currentTx.remainingBalance != null) {
+                        lastKnownBalances[currentTx.accountIdentifier] = currentTx.remainingBalance
                     }
-                    tx
+                    currentTx
                 } else {
-                    var lastBal = lastKnownBalances[tx.accountIdentifier]
+                    var lastBal = lastKnownBalances[currentTx.accountIdentifier]
                     if (lastBal == null) {
-                        lastBal = transactionDao.getLastAvailableBalance(tx.accountIdentifier)
+                        lastBal = transactionDao.getLastAvailableBalance(currentTx.accountIdentifier)
                     }
                     
                     if (lastBal != null) {
-                        val newBal = if (tx.type == "Credit") {
-                            lastBal + tx.amount
+                        val newBal = if (currentTx.type == "Credit") {
+                            lastBal + currentTx.amount
                         } else {
-                            lastBal - tx.amount
+                            lastBal - currentTx.amount
                         }
-                        lastKnownBalances[tx.accountIdentifier] = newBal
-                        tx.copy(remainingBalance = newBal)
+                        lastKnownBalances[currentTx.accountIdentifier] = newBal
+                        currentTx.copy(remainingBalance = newBal)
                     } else {
-                        tx
+                        currentTx
                     }
                 }
                 
@@ -164,8 +256,16 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
         return transaction
     }
 
-    suspend fun updateTransactionCategory(id: Long, category: String) {
+    suspend fun updateTransactionCategory(id: Long, category: String, beneficiary: String? = null) {
         transactionDao.updateTransactionCategory(id, category)
+        if (beneficiary != null) {
+            saveCategoryMapping(beneficiary, category)
+        } else {
+            val tx = transactionDao.getAllTransactionsList().find { it.id == id }
+            if (tx != null) {
+                saveCategoryMapping(tx.beneficiary, category)
+            }
+        }
     }
 
     suspend fun updateTransactionType(id: Long, type: String) {
@@ -178,6 +278,7 @@ class TransactionRepository(private val transactionDao: TransactionDao) {
 
     suspend fun updatePastTransactionsCategory(beneficiary: String, timestamp: Long, category: String) {
         transactionDao.updatePastTransactionsCategory(beneficiary, timestamp, category)
+        saveCategoryMapping(beneficiary, category)
     }
 
     suspend fun deleteAll() {

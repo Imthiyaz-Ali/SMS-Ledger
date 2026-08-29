@@ -30,8 +30,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -154,6 +158,12 @@ data class BulkUpdateDialogInfo(
     val priorTransactions: List<TransactionSMS>
 )
 
+data class DailySpendData(
+    val dateKey: String,
+    val label: String,
+    val amount: Double
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SMSLedgerApp(
@@ -169,6 +179,8 @@ fun SMSLedgerApp(
     // Screen State selector (0 = Home/Dashboard, 1 = Analysis/Detailed, 2 = Trends)
     var currentScreenTabIndex by remember { mutableStateOf(0) }
     var selectedFilterMonthLabel by remember { mutableStateOf<String?>(null) }
+    var selectedFilterDateKey by remember { mutableStateOf<String?>(null) }
+    var selectedAnalysisTypeFilter by remember { mutableStateOf<String?>(null) }
 
     // Dialog state for viewing full text and verification BottomSheet
     var selectedTransaction by remember { mutableStateOf<TransactionSMS?>(null) }
@@ -333,6 +345,11 @@ fun SMSLedgerApp(
                             showCategorySheetForTransaction = tx
                         },
                         onNavigateToTab = { index -> currentScreenTabIndex = index },
+                        onDayClick = { dateKey ->
+                            selectedFilterDateKey = dateKey
+                            selectedFilterMonthLabel = null
+                            currentScreenTabIndex = 1
+                        },
                         onUpdateReminderCompleted = { id, isCompleted -> viewModel.updateTransactionCompleted(id, isCompleted) },
                         onSimulateNotifications = {
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
@@ -377,8 +394,13 @@ fun SMSLedgerApp(
                     )
                     }
                     1 -> {
-                        val filteredTxs = remember(transactions, selectedFilterMonthLabel) {
-                            if (selectedFilterMonthLabel != null) {
+                        val filteredTxs = remember(transactions, selectedFilterMonthLabel, selectedFilterDateKey, selectedAnalysisTypeFilter) {
+                            val baseTxs = if (selectedFilterDateKey != null) {
+                                transactions.filter { tx ->
+                                    val txDateKey = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(tx.timestamp))
+                                    txDateKey == selectedFilterDateKey
+                                }
+                            } else if (selectedFilterMonthLabel != null) {
                                 transactions.filter { tx ->
                                     val txCal = Calendar.getInstance().apply { timeInMillis = tx.timestamp }
                                     val m = SimpleDateFormat("MMM", Locale.US).format(txCal.time)
@@ -388,19 +410,41 @@ fun SMSLedgerApp(
                             } else {
                                 transactions
                             }
+                            
+                            when (selectedAnalysisTypeFilter) {
+                                "Expenses" -> {
+                                    baseTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }
+                                }
+                                "Income" -> {
+                                    baseTxs.filter { it.type == "Credit" && !it.category.equals("Transfer", ignoreCase = true) }
+                                }
+                                else -> baseTxs
+                            }
                         }
-                        val filteredExpenses = remember(filteredTxs, selectedFilterMonthLabel) {
-                            if (selectedFilterMonthLabel != null) {
-                                filteredTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
-                            } else {
-                                currentMonthExpenses
+                        val filteredAmount = remember(filteredTxs, selectedFilterMonthLabel, selectedFilterDateKey, selectedAnalysisTypeFilter) {
+                            when (selectedAnalysisTypeFilter) {
+                                "Expenses", "Income" -> {
+                                    filteredTxs.sumOf { it.amount }
+                                }
+                                else -> {
+                                    if (selectedFilterDateKey != null || selectedFilterMonthLabel != null) {
+                                        filteredTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
+                                    } else {
+                                        currentMonthExpenses
+                                    }
+                                }
                             }
                         }
                         AnalysisDetailedScreen(
                             transactions = filteredTxs,
-                            totalExpenses = filteredExpenses,
+                            totalExpenses = filteredAmount,
                             selectedFilterMonthLabel = selectedFilterMonthLabel,
-                            onClearFilter = { selectedFilterMonthLabel = null },
+                            selectedFilterDateKey = selectedFilterDateKey,
+                            onClearFilter = { 
+                                selectedFilterMonthLabel = null 
+                                selectedFilterDateKey = null
+                                selectedAnalysisTypeFilter = null
+                            },
                             onTransactionClick = { tx ->
                                 selectedTransaction = tx
                                 showBottomSheet = true
@@ -408,15 +452,18 @@ fun SMSLedgerApp(
                             onCategoryClick = { tx ->
                                 categorySheetOpenedFromDetail = false
                                 showCategorySheetForTransaction = tx
-                            }
+                            },
+                            analysisTypeFilter = selectedAnalysisTypeFilter
                         )
                     }
                     2 -> AdvancedTrendsScreen(
                         transactions = transactions,
                         totalExpenses = currentMonthExpenses,
                         totalIncome = currentMonthIncome,
-                        onReviewMonth = { monthLabel ->
+                        onReviewMonth = { monthLabel, typeFilter ->
                             selectedFilterMonthLabel = monthLabel
+                            selectedFilterDateKey = null
+                            selectedAnalysisTypeFilter = typeFilter
                             currentScreenTabIndex = 1
                         }
                     )
@@ -461,7 +508,8 @@ fun SMSLedgerApp(
         }
 
         // Active Bottom Sheet popup
-        if (showBottomSheet && selectedTransaction != null) {
+        val currentTxDetail = selectedTransaction
+        if (showBottomSheet && currentTxDetail != null) {
             ModalBottomSheet(
                 onDismissRequest = {
                     showBottomSheet = false
@@ -473,7 +521,7 @@ fun SMSLedgerApp(
                 sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ) {
                 ParsedTransactionDetailSheet(
-                    transaction = selectedTransaction!!,
+                    transaction = currentTxDetail,
                     onDismiss = {
                         showBottomSheet = false
                         selectedTransaction = null
@@ -493,8 +541,9 @@ fun SMSLedgerApp(
         }
 
         // Type selection sheet
-        if (showTypeSheetForTransaction != null) {
-            val tx = showTypeSheetForTransaction!!
+        val currentTypeSheetTx = showTypeSheetForTransaction
+        if (currentTypeSheetTx != null) {
+            val tx = currentTypeSheetTx
             ModalBottomSheet(
                 onDismissRequest = {
                     showTypeSheetForTransaction = null
@@ -527,10 +576,14 @@ fun SMSLedgerApp(
         }
 
         // Categories selection sheet
-        if (showCategorySheetForTransaction != null) {
-            val tx = showCategorySheetForTransaction!!
-            val existingCustom = remember(transactions) {
-                transactions.map { it.category }.distinct().filter { 
+        val currentCategorySheetTx = showCategorySheetForTransaction
+        if (currentCategorySheetTx != null) {
+            val tx = currentCategorySheetTx
+            val savedCustomCategories by viewModel.customCategories.collectAsState()
+            val existingCustom = remember(transactions, savedCustomCategories) {
+                val fromTx = transactions.map { it.category }
+                (savedCustomCategories + fromTx).distinct().filter { 
+                    it.isNotBlank() &&
                     it != "Bills" && it != "EMI" && it != "Entertainment" && it != "Food & Drinks" &&
                     it != "Fuel" && it != "Groceries" && it != "Health" && it != "Investment" &&
                     it != "Other" && it != "Shopping" && it != "Transfer" && it != "Travel" && 
@@ -551,6 +604,7 @@ fun SMSLedgerApp(
                 CategoriesSelectionSheet(
                     selectedCategory = tx.category,
                     onCategorySelected = { newCategory ->
+                        viewModel.addCustomCategory(newCategory)
                         if (newCategory != tx.category && tx.beneficiary.isNotBlank()) {
                             val prior = transactions.filter {
                                 it.beneficiary.equals(tx.beneficiary, ignoreCase = true) &&
@@ -565,7 +619,7 @@ fun SMSLedgerApp(
                                 )
                                 showCategorySheetForTransaction = null
                             } else {
-                                viewModel.updateTransactionCategory(tx.id, newCategory)
+                                viewModel.updateTransactionCategory(tx.id, newCategory, tx.beneficiary)
                                 selectedTransaction = selectedTransaction?.copy(category = newCategory)
                                 showCategorySheetForTransaction = null
                                 if (categorySheetOpenedFromDetail) {
@@ -573,7 +627,7 @@ fun SMSLedgerApp(
                                 }
                             }
                         } else {
-                            viewModel.updateTransactionCategory(tx.id, newCategory)
+                            viewModel.updateTransactionCategory(tx.id, newCategory, tx.beneficiary)
                             selectedTransaction = selectedTransaction?.copy(category = newCategory)
                             showCategorySheetForTransaction = null
                             if (categorySheetOpenedFromDetail) {
@@ -592,8 +646,9 @@ fun SMSLedgerApp(
             }
         }
 
-        if (bulkUpdateDialogInfo != null) {
-            val info = bulkUpdateDialogInfo!!
+        val currentBulkInfo = bulkUpdateDialogInfo
+        if (currentBulkInfo != null) {
+            val info = currentBulkInfo
             val cleanName = formatYesBankBeneficiary(info.transaction.beneficiary)
             AlertDialog(
                 onDismissRequest = {
@@ -622,7 +677,7 @@ fun SMSLedgerApp(
                             contentColor = DarkGreenOnPrimary
                         ),
                         onClick = {
-                            viewModel.updateTransactionCategory(info.transaction.id, info.newCategory)
+                            viewModel.updateTransactionCategory(info.transaction.id, info.newCategory, info.transaction.beneficiary)
                             viewModel.updatePastTransactionsCategory(
                                 beneficiary = info.transaction.beneficiary,
                                 timestamp = info.transaction.timestamp,
@@ -651,7 +706,7 @@ fun SMSLedgerApp(
                         Spacer(modifier = Modifier.width(8.dp))
                         TextButton(
                             onClick = {
-                                viewModel.updateTransactionCategory(info.transaction.id, info.newCategory)
+                                viewModel.updateTransactionCategory(info.transaction.id, info.newCategory, info.transaction.beneficiary)
                                 selectedTransaction = selectedTransaction?.copy(category = info.newCategory)
                                 bulkUpdateDialogInfo = null
                                 if (categorySheetOpenedFromDetail) {
@@ -694,7 +749,8 @@ fun DashboardMainScreen(
     onCategoryClick: ((TransactionSMS) -> Unit)? = null,
     onNavigateToTab: (Int) -> Unit,
     onSimulateNotifications: () -> Unit,
-    onUpdateReminderCompleted: (Long, Boolean) -> Unit
+    onUpdateReminderCompleted: (Long, Boolean) -> Unit,
+    onDayClick: ((String) -> Unit)? = null
 ) {
     var showAllAccountsSheet by remember { mutableStateOf(false) }
     var showAllRemindersSheet by remember { mutableStateOf(false) }
@@ -750,6 +806,25 @@ fun DashboardMainScreen(
         Triple(activeCurrent, completedCurrent, past)
     }
 
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+
+    val searchResults = remember(transactions, searchQuery, isSearchActive) {
+        if (!isSearchActive || searchQuery.isEmpty()) {
+            emptyList<TransactionSMS>()
+        } else {
+            val q = searchQuery.trim().lowercase(Locale.US)
+            transactions.filter { tx ->
+                tx.category.lowercase(Locale.US).contains(q) ||
+                tx.beneficiary.lowercase(Locale.US).contains(q) ||
+                tx.rawSms.lowercase(Locale.US).contains(q) ||
+                tx.type.lowercase(Locale.US).contains(q) ||
+                tx.accountIdentifier.lowercase(Locale.US).contains(q) ||
+                tx.amount.toString().contains(q)
+            }
+        }
+    }
+
     val topFive = remember(transactions) {
         transactions.filter { it.type != "Reminder" }.take(5)
     }
@@ -769,6 +844,47 @@ fun DashboardMainScreen(
         }
     }
 
+    val dailySpends = remember(transactions) {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val displayFormat = SimpleDateFormat("EEE\nd/M", Locale.US)
+        
+        // Generate the last 7 days (6 days ago through today)
+        val daysList = (0..6).map { daysAgo ->
+            val cal = Calendar.getInstance()
+            cal.add(Calendar.DAY_OF_YEAR, -daysAgo)
+            cal
+        }.reversed()
+        
+        daysList.map { cal ->
+            val dateKey = sdf.format(cal.time)
+            val label = displayFormat.format(cal.time)
+            
+            val totalOnDay = transactions.filter { tx ->
+                val txDateKey = sdf.format(Date(tx.timestamp))
+                txDateKey == dateKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
+            }.sumOf { it.amount }
+            
+            DailySpendData(
+                dateKey = dateKey,
+                label = label,
+                amount = totalOnDay
+            )
+        }
+    }
+
+    val maxSpend = remember(dailySpends) {
+        val maxVal = dailySpends.maxOfOrNull { it.amount } ?: 0.0
+        if (maxVal == 0.0) 1.0 else maxVal
+    }
+
+    val totalWeeklyExpenses = remember(dailySpends) {
+        dailySpends.sumOf { it.amount }
+    }
+
+    val averageDailyExpenses = remember(totalWeeklyExpenses) {
+        totalWeeklyExpenses / 7.0
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier
@@ -779,135 +895,415 @@ fun DashboardMainScreen(
         ) {
         // Line 1: Header (Hi Imthiyaz + Subtitle + Search Icon & controls)
         item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "Hi ",
-                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                            color = PureWhiteText
-                        )
-                        Text(
-                            text = "Imthiyaz",
-                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MintLimePrimary
-                        )
-                    }
-                    Text(
-                        text = "Your June snapshot is complete",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MutedGreyText
-                    )
-                }
-
-                // Control and Action bar
+            if (isSearchActive) {
+                // Active search bar
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                        .background(LightCharcoalSurface, RoundedCornerShape(12.dp))
+                        .border(1.dp, BorderOutline, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
-                        onClick = { /* Search Action */ },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(Color.White.copy(alpha = 0.05f), CircleShape)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Search Logs",
-                            tint = PureWhiteText,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-
-                    IconButton(
                         onClick = {
-                            if (hasSMSPermission) {
-                                onScanClick()
-                            } else {
-                                onRequestPermission()
-                            }
-                        },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                            isSearchActive = false
+                            searchQuery = ""
+                        }
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Scan SMS Inbox",
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Exit Search",
                             tint = MintLimePrimary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    
+                    BasicTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = PureWhiteText),
+                        cursorBrush = SolidColor(MintLimePrimary),
+                        singleLine = true,
+                        decorationBox = { innerTextField ->
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                if (searchQuery.isEmpty()) {
+                                    Text(
+                                        "Search categories, merchants, text...",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MutedGreyText
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        }
+                    )
+                    
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { searchQuery = "" }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                tint = MutedGreyText,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Hi ",
+                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                                color = PureWhiteText
+                            )
+                            Text(
+                                text = "Imthiyaz",
+                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MintLimePrimary
+                            )
+                        }
+                        Text(
+                            text = "Your June snapshot is complete",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MutedGreyText
                         )
                     }
 
+                    // Control and Action bar
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = { isSearchActive = true },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search Logs",
+                                tint = PureWhiteText,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
 
+                        IconButton(
+                            onClick = {
+                                if (hasSMSPermission) {
+                                    onScanClick()
+                                } else {
+                                    onRequestPermission()
+                                }
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Scan SMS Inbox",
+                                tint = MintLimePrimary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        // Line 2: Circular Metric Container (Total spends and Income below)
-        item {
-            Box(
+        if (isSearchActive) {
+            // Search Active Sections
+            item {
+                Text(
+                    text = if (searchQuery.isEmpty()) "Search Transactions" else "Search Results (${searchResults.size} found)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = PureWhiteText,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                )
+            }
+            
+            if (searchQuery.isEmpty()) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                        border = BorderStroke(1.dp, BorderOutline)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = null,
+                                tint = MutedGreyText.copy(alpha = 0.5f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Type above to search transactions",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = PureWhiteText
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Search by category, amount, merchant, or SMS text description",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MutedGreyText,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else if (searchResults.isNotEmpty()) {
+                items(searchResults) { tx ->
+                    TransactionListItemRow(
+                        tx = tx,
+                        onClick = { onTransactionClick(tx) },
+                        onIconClick = { onCategoryClick?.invoke(tx) }
+                    )
+                }
+            } else {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                        border = BorderStroke(1.dp, BorderOutline)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MutedGreyText.copy(alpha = 0.5f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "No results found",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = PureWhiteText
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "No transactions match your query '$searchQuery'",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MutedGreyText,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Line 2: 1-Week Daily Spends Custom Bar Chart (replacing Total Monthly Spends)
+            item {
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
+                    .padding(vertical = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, BorderOutline)
             ) {
-                // Main circular dashboard metric block
                 Column(
                     modifier = Modifier
-                        .size(190.dp)
-                        .background(LightCharcoalSurface, CircleShape)
-                        .border(1.2.dp, MintLimePrimary.copy(alpha = 0.7f), CircleShape)
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                        .fillMaxWidth()
+                        .padding(16.dp)
                 ) {
-                    // Mint accented trending arrow indicating spent
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(MintLimePrimary.copy(alpha = 0.12f), CircleShape),
-                        contentAlignment = Alignment.Center
+                    // Card Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.CallMade, // represents "↗" perfectly
-                            contentDescription = "Spends Outward Arrow",
-                            tint = MintLimePrimary,
-                            modifier = Modifier.size(16.dp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(MintLimePrimary.copy(alpha = 0.12f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.BarChart,
+                                    contentDescription = "Weekly Tracker Icon",
+                                    tint = MintLimePrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "WEEKLY TRACKER",
+                                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                    color = MutedGreyText,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Daily Spends (Last 7 Days)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MutedGreyText
+                                )
+                            }
+                        }
+                        
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = String.format(Locale.getDefault(), "₹%,.0f", totalWeeklyExpenses),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
+                                color = PureWhiteText
+                            )
+                            Text(
+                                text = "Weekly Total",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MutedGreyText
+                            )
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    // Custom Bar Chart Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(130.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        dailySpends.forEach { item ->
+                            val barHeightFraction = if (maxSpend > 0) (item.amount / maxSpend).toFloat() else 0f
+                            val isToday = item.dateKey == SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+                            
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Bottom,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        onDayClick?.invoke(item.dateKey)
+                                    }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                // Value above bar (compact formatting)
+                                if (item.amount > 0) {
+                                    Text(
+                                        text = if (item.amount >= 1000) {
+                                            String.format(Locale.getDefault(), "₹%.1fk", item.amount / 1000.0)
+                                        } else {
+                                            String.format(Locale.getDefault(), "₹%.0f", item.amount)
+                                        },
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontSize = 9.sp,
+                                            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
+                                        ),
+                                        color = if (isToday) MintLimePrimary else PureWhiteText.copy(alpha = 0.8f),
+                                        modifier = Modifier.padding(bottom = 4.dp),
+                                        maxLines = 1
+                                    )
+                                } else {
+                                    Spacer(modifier = Modifier.height(14.dp)) // Placeholder space
+                                }
+                                
+                                // Bar
+                                Box(
+                                    modifier = Modifier
+                                        .width(16.dp)
+                                        .height(maxOf(4.dp, (barHeightFraction * 75).dp)) // Scale bar up to 75.dp max
+                                        .background(
+                                            color = when {
+                                                item.amount == 0.0 -> Color.White.copy(alpha = 0.08f)
+                                                isToday -> MintLimePrimary
+                                                else -> AquaTertiary.copy(alpha = 0.85f)
+                                            },
+                                            shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp, bottomStart = 1.dp, bottomEnd = 1.dp)
+                                        )
+                                )
+                                
+                                Spacer(modifier = Modifier.height(6.dp))
+                                
+                                // Day & Date label
+                                Text(
+                                    text = item.label,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = 9.sp, 
+                                        lineHeight = 11.sp,
+                                        fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
+                                    ),
+                                    color = if (isToday) MintLimePrimary else MutedGreyText,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    HorizontalDivider(color = BorderOutline, thickness = 1.dp)
+                    
+                    Spacer(modifier = Modifier.height(12.dp))
+                    
+                    // Metric details footer
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "Daily Average Info",
+                                tint = MutedGreyText.copy(alpha = 0.6f),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = String.format(Locale.getDefault(), "Daily Average: ₹%,.0f/day", averageDailyExpenses),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MutedGreyText
+                            )
+                        }
+                        
+                        Text(
+                            text = "Swipe tabs for analytics",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                            color = MintLimePrimary.copy(alpha = 0.7f),
+                            fontWeight = FontWeight.Medium
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "TOTAL SPENDS",
-                        style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
-                        color = MutedGreyText,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    Text(
-                        text = String.format(Locale.getDefault(), "₹%,.0f", totalExpenses),
-                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black),
-                        color = PureWhiteText
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Soft credit summary below
-                    Text(
-                        text = String.format(Locale.getDefault(), "Income: +₹%,.0f", totalIncome),
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-                        color = Color(0xFF81C784)
-                    )
                 }
             }
         }
@@ -1353,7 +1749,7 @@ fun DashboardMainScreen(
                                     onClick = { onUpdateReminderCompleted(due.id, false) }
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Undo,
+                                        imageVector = Icons.AutoMirrored.Filled.Undo,
                                         contentDescription = "Mark as active",
                                         tint = MutedGreyText,
                                         modifier = Modifier.size(20.dp)
@@ -1496,6 +1892,7 @@ fun DashboardMainScreen(
                 }
             }
         }
+        } // Close our 'else' block
     }
 
     if (showAllAccountsSheet) {
@@ -1854,7 +2251,7 @@ fun DashboardMainScreen(
                                             onClick = { onUpdateReminderCompleted(due.id, false) }
                                         ) {
                                             Icon(
-                                                imageVector = Icons.Default.Undo,
+                                                imageVector = Icons.AutoMirrored.Filled.Undo,
                                                 contentDescription = "Mark active",
                                                 tint = MutedGreyText,
                                                 modifier = Modifier.size(20.dp)
@@ -1954,7 +2351,7 @@ fun DashboardMainScreen(
                                                 onClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) }
                                             ) {
                                                 Icon(
-                                                    imageVector = if (due.isCompleted) Icons.Default.Undo else Icons.Default.CheckCircle,
+                                                    imageVector = if (due.isCompleted) Icons.AutoMirrored.Filled.Undo else Icons.Default.CheckCircle,
                                                     contentDescription = "Toggle status",
                                                     tint = MutedGreyText,
                                                     modifier = Modifier.size(20.dp)
@@ -2098,7 +2495,7 @@ fun DashboardMainScreen(
                                                 onClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) }
                                             ) {
                                                 Icon(
-                                                    imageVector = if (due.isCompleted) Icons.Default.Undo else Icons.Default.CheckCircle,
+                                                    imageVector = if (due.isCompleted) Icons.AutoMirrored.Filled.Undo else Icons.Default.CheckCircle,
                                                     contentDescription = "Toggle status",
                                                     tint = MutedGreyText,
                                                     modifier = Modifier.size(20.dp)
@@ -2148,6 +2545,7 @@ fun DashboardMainScreen(
 // ==========================================
 // SCREEN 2: ALL TRANSACTIONS & CATEGORIES SCREEN (image_1.png / image_2.png)
 // ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnalysisDetailedScreen(
     transactions: List<TransactionSMS>,
@@ -2155,9 +2553,12 @@ fun AnalysisDetailedScreen(
     onTransactionClick: (TransactionSMS) -> Unit,
     onCategoryClick: ((TransactionSMS) -> Unit)? = null,
     selectedFilterMonthLabel: String? = null,
-    onClearFilter: (() -> Unit)? = null
+    selectedFilterDateKey: String? = null,
+    onClearFilter: (() -> Unit)? = null,
+    analysisTypeFilter: String? = null
 ) {
     var subTabState by remember { mutableStateOf(0) } // 0 = Transactions, 1 = Categories, 2 = Merchants
+    var selectedCategoryForDetail by remember { mutableStateOf<CategoryAgg?>(null) }
 
     Column(
         modifier = Modifier
@@ -2187,7 +2588,26 @@ fun AnalysisDetailedScreen(
                         color = MutedGreyText
                     )
                 }
-                if (selectedFilterMonthLabel != null) {
+                
+                val filterText = when {
+                    selectedFilterDateKey != null -> {
+                        try {
+                            val parser = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                            val formatter = SimpleDateFormat("d MMM", Locale.US)
+                            val date = parser.parse(selectedFilterDateKey)
+                            val base = if (date != null) formatter.format(date) else selectedFilterDateKey
+                            if (analysisTypeFilter != null) "$base $analysisTypeFilter" else base
+                        } catch (e: Exception) {
+                            selectedFilterDateKey
+                        }
+                    }
+                    selectedFilterMonthLabel != null -> {
+                        if (analysisTypeFilter != null) "$selectedFilterMonthLabel $analysisTypeFilter" else selectedFilterMonthLabel
+                    }
+                    else -> analysisTypeFilter
+                }
+                
+                if (filterText != null) {
                     FilledTonalButton(
                         onClick = { onClearFilter?.invoke() },
                         colors = ButtonDefaults.filledTonalButtonColors(
@@ -2200,7 +2620,7 @@ fun AnalysisDetailedScreen(
                         modifier = Modifier.height(32.dp)
                     ) {
                         Text(
-                            text = "Show All ($selectedFilterMonthLabel ✕)",
+                            text = "Show All ($filterText ✕)",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
                             color = MintLimePrimary
                         )
@@ -2231,15 +2651,20 @@ fun AnalysisDetailedScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.CallMade,
+                        imageVector = Icons.AutoMirrored.Filled.CallMade,
                         contentDescription = "outfacing arrow",
                         tint = MintLimePrimary,
                         modifier = Modifier.size(14.dp)
                     )
                 }
                 Spacer(modifier = Modifier.height(6.dp))
+                val labelText = when {
+                    analysisTypeFilter == "Income" -> if (selectedFilterDateKey != null) "DAILY INCOME" else "MONTHLY INCOME"
+                    analysisTypeFilter == "Expenses" -> if (selectedFilterDateKey != null) "DAILY SPENDS" else "MONTHLY SPENDS"
+                    else -> if (selectedFilterDateKey != null) "DAILY SPENDS" else "MONTHLY SPENDS"
+                }
                 Text(
-                    text = "MONTHLY SPENDS",
+                    text = labelText,
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
                     color = MutedGreyText,
                     fontWeight = FontWeight.SemiBold
@@ -2336,7 +2761,10 @@ fun AnalysisDetailedScreen(
 
                             // Dynamic list of category cards underneath
                             items(categoryList) { cat ->
-                                CategoryCardView(cat = cat)
+                                CategoryCardView(
+                                    cat = cat,
+                                    onClick = { selectedCategoryForDetail = cat }
+                                )
                             }
                         }
                     } else {
@@ -2356,6 +2784,132 @@ fun AnalysisDetailedScreen(
                         }
                     } else {
                         EmptyStatePlaceholder()
+                    }
+                }
+            }
+        }
+    }
+
+    // Category transactions popup sheet
+    val currentCatDetail = selectedCategoryForDetail
+    if (currentCatDetail != null) {
+        val cat = currentCatDetail
+        val catTransactions = remember(transactions, cat.category) {
+            transactions.filter { tx ->
+                tx.category.equals(cat.category, ignoreCase = true) && tx.type != "Reminder"
+            }
+        }
+        ModalBottomSheet(
+            onDismissRequest = {
+                selectedCategoryForDetail = null
+            },
+            containerColor = LightCharcoalSurface,
+            contentColor = PureWhiteText,
+            tonalElevation = 16.dp,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 24.dp)
+            ) {
+                // Header inside BottomSheet
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(cat.color.copy(alpha = 0.15f), CircleShape)
+                                .border(1.5.dp, cat.color.copy(alpha = 0.4f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            when (val icon = cat.icon) {
+                                is CategoryIcon.Vector -> {
+                                    Icon(
+                                        imageVector = icon.imageVector,
+                                        contentDescription = cat.category,
+                                        tint = cat.color,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                is CategoryIcon.Character -> {
+                                    Text(
+                                        text = icon.char.toString(),
+                                        color = cat.color,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                }
+                                is CategoryIcon.OthersSpecial -> {
+                                    OthersIcon(size = 18.dp)
+                                }
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = cat.category,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = PureWhiteText
+                            )
+                            Text(
+                                text = "${catTransactions.size} transactions",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MutedGreyText
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = String.format(Locale.getDefault(), "₹%,.2f", cat.amount),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = cat.color
+                    )
+                }
+
+                HorizontalDivider(
+                    color = BorderOutline,
+                    thickness = 1.dp,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                if (catTransactions.isNotEmpty()) {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxHeight(0.6f)
+                    ) {
+                        items(catTransactions) { tx ->
+                            TransactionListItemRow(
+                                tx = tx,
+                                onClick = { 
+                                    onTransactionClick(tx)
+                                    selectedCategoryForDetail = null
+                                },
+                                onIconClick = { onCategoryClick?.invoke(tx) }
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No transactions found in this category",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MutedGreyText
+                        )
                     }
                 }
             }
@@ -2425,9 +2979,11 @@ fun DonutChartView(
 
 // Category Row Visual Card
 @Composable
-fun CategoryCardView(cat: CategoryAgg) {
+fun CategoryCardView(cat: CategoryAgg, onClick: (() -> Unit)? = null) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
         border = BorderStroke(1.dp, BorderOutline)
@@ -2561,7 +3117,7 @@ fun AdvancedTrendsScreen(
     transactions: List<TransactionSMS>,
     totalExpenses: Double,
     totalIncome: Double,
-    onReviewMonth: (String) -> Unit
+    onReviewMonth: (String, String) -> Unit
 ) {
     val monthlyTrendList = remember(transactions) { getMonthlyTrendData(transactions) }
     
@@ -2595,52 +3151,34 @@ fun AdvancedTrendsScreen(
             .fillMaxSize()
             .padding(horizontal = 16.dp)
     ) {
-        // 1. Top Header Row (Back button, Title, Filter icon)
+        // 1. Top Header Row (Back button, Title)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = {
-                        Toast.makeText(context, "Navigating back...", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back",
-                        tint = PureWhiteText
-                    )
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(
-                    text = "Trends by month ▾",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 19.sp
-                    ),
-                    color = PureWhiteText,
-                    modifier = Modifier.clickable {
-                        Toast.makeText(context, "Trends filter dropdown clicked", Toast.LENGTH_SHORT).show()
-                    }
-                )
-            }
             IconButton(
                 onClick = {
-                    Toast.makeText(context, "Filter menu clicked", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Navigating back...", Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier.size(24.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Default.FilterList,
-                    contentDescription = "Filter",
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
                     tint = PureWhiteText
                 )
             }
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(
+                text = "Trends",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 19.sp
+                ),
+                color = PureWhiteText
+            )
         }
 
         // 2. The Custom Interactive Scrollable Dual-Axis Chart Area
@@ -2686,6 +3224,15 @@ fun AdvancedTrendsScreen(
             fun formatYAxisValue(value: Double): String {
                 return when {
                     value >= 100000.0 -> String.format(Locale.US, "%.1fL", value / 100000.0)
+                    value >= 1000.0 -> String.format(Locale.US, "%.1fK", value / 1000.0)
+                    else -> String.format(Locale.US, "%.0f", value)
+                }
+            }
+
+            // Helper format for chart value labels above data lines/bars: e.g. 2.15L or 1.2K
+            fun formatChartValueLabel(value: Double): String {
+                return when {
+                    value >= 100000.0 -> String.format(Locale.US, "%.2fL", value / 100000.0)
                     value >= 1000.0 -> String.format(Locale.US, "%.1fK", value / 1000.0)
                     else -> String.format(Locale.US, "%.0f", value)
                 }
@@ -2846,6 +3393,71 @@ fun AdvancedTrendsScreen(
                         }
                     }
 
+                    // Value labels overlay drawn above bars and dots
+                    Row(
+                        modifier = Modifier
+                            .width(totalWidth)
+                            .height(chartHeight)
+                    ) {
+                        monthlyTrendList.forEach { d ->
+                            Box(
+                                modifier = Modifier
+                                    .width(columnWidth)
+                                    .fillMaxHeight()
+                            ) {
+                                // Spends Label (shifted slightly to the left to prevent overlapping)
+                                if (d.expenses > 0) {
+                                    val barHeightFraction = (d.expenses / safeLimitVal).toFloat()
+                                    val barHeightDp = chartHeight * barHeightFraction
+                                    val spendsOffset = (chartHeight - barHeightDp - 14.dp).coerceAtLeast(2.dp)
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .offset(x = (-15).dp, y = spendsOffset)
+                                            .background(Color(0xFF151926).copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 3.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = formatChartValueLabel(d.expenses),
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = Color(0xFFC5CAE9),
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+
+                                // Income Label (shifted slightly to the right to prevent overlapping)
+                                if (d.income > 0) {
+                                    val incomeHeightFraction = (d.income / safeLimitVal).toFloat()
+                                    val incomeHeightDp = chartHeight * incomeHeightFraction
+                                    val incomeOffset = (chartHeight - incomeHeightDp - 18.dp).coerceAtLeast(2.dp)
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .offset(x = 15.dp, y = incomeOffset)
+                                            .background(Color(0xFF151926).copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 3.dp, vertical = 1.dp)
+                                    ) {
+                                        Text(
+                                            text = formatChartValueLabel(d.income),
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Black
+                                            ),
+                                            color = MintLimePrimary,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Click detection Overlay on columns
                     Row(modifier = Modifier.width(totalWidth)) {
                         monthlyTrendList.forEach { d ->
@@ -2941,6 +3553,9 @@ fun AdvancedTrendsScreen(
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color(0xFF262C40)) // gorgeous deep blue-grey container
                     .border(1.dp, Color(0xFF333D66), RoundedCornerShape(24.dp))
+                    .clickable {
+                        onReviewMonth(selectedMonthLabel, "Expenses")
+                    }
             ) {
                 // Background Concentric Rings (matching screenshot)
                 Canvas(modifier = Modifier.fillMaxSize()) {
@@ -3020,6 +3635,9 @@ fun AdvancedTrendsScreen(
                         .clip(RoundedCornerShape(18.dp))
                         .background(Color(0xFF1B3D28)) // Rich forest emerald
                         .border(1.dp, Color(0xFF2E633C).copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+                        .clickable {
+                            onReviewMonth(selectedMonthLabel, "Income")
+                        }
                         .padding(12.dp)
                 ) {
                     Row(
@@ -3112,7 +3730,7 @@ fun AdvancedTrendsScreen(
         // 5. Dynamic Prominent Action Button at the extremely bottom
         Button(
             onClick = {
-                onReviewMonth(selectedMonthLabel)
+                onReviewMonth(selectedMonthLabel, "Expenses")
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -3506,7 +4124,7 @@ fun SheetDetailRow(
 // Dynamic Assets helper mapping categories to corresponding icons and color tones
 fun getCategoryAsset(category: String): Pair<CategoryIcon, Color> {
     return when (category) {
-        "Bills" -> CategoryIcon.Vector(Icons.Default.ReceiptLong) to Color(0xFF4CAF50)          // Green
+        "Bills" -> CategoryIcon.Vector(Icons.AutoMirrored.Filled.ReceiptLong) to Color(0xFF4CAF50)          // Green
         "EMI" -> CategoryIcon.Vector(Icons.Default.AccountBalance) to Color(0xFF9E9E9E)        // Grey
         "Entertainment" -> CategoryIcon.Vector(Icons.Default.Celebration) to Color(0xFF3F51B5)  // Indigo Blue
         "Food & Drinks" -> CategoryIcon.Vector(Icons.Default.Restaurant) to Color(0xFFE91E63)   // Pink/Magenta
@@ -3867,14 +4485,7 @@ fun CategoriesSelectionSheet(
 
 // Helpers for list aggregations inside Detailed Analysis
 fun getCategorySpendList(transactions: List<TransactionSMS>): List<CategoryAgg> {
-    val currentMonthKey = SimpleDateFormat("MM-yyyy", Locale.US).format(Date())
-
-    val currentSpends = transactions.filter { tx ->
-        val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment"
-    }
-
-    val grouped = currentSpends.groupBy { it.category }
+    val grouped = transactions.groupBy { it.category }
 
     return grouped.map { (cat, list) ->
         val details = getCategoryAsset(cat)
@@ -3889,14 +4500,7 @@ fun getCategorySpendList(transactions: List<TransactionSMS>): List<CategoryAgg> 
 }
 
 fun getMerchantSpendList(transactions: List<TransactionSMS>): List<MerchantAgg> {
-    val currentMonthKey = SimpleDateFormat("MM-yyyy", Locale.US).format(Date())
-
-    val currentSpends = transactions.filter { tx ->
-        val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-        format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment"
-    }
-
-    val grouped = currentSpends.groupBy { it.beneficiary }
+    val grouped = transactions.groupBy { it.beneficiary }
 
     return grouped.map { (merch, list) ->
         MerchantAgg(

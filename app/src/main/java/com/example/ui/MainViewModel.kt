@@ -7,10 +7,12 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.*
 import com.example.utils.SMSInboxReader
 import com.example.utils.TransactionParser
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.Calendar
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: TransactionRepository
@@ -23,23 +25,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val rejectedAccounts: StateFlow<Set<String>> = _rejectedAccounts.asStateFlow()
 
     init {
-        val dao = AppDatabase.getDatabase(application).transactionDao()
-        repository = TransactionRepository(dao)
+        val db = AppDatabase.getDatabase(application)
+        repository = TransactionRepository(
+            transactionDao = db.transactionDao(),
+            categoryMappingDao = db.categoryMappingDao(),
+            customCategoryDao = db.customCategoryDao()
+        )
 
-        _approvedAccounts.value = sharedPrefs.getStringSet("approved", emptySet()) ?: emptySet()
-        _rejectedAccounts.value = sharedPrefs.getStringSet("rejected", emptySet()) ?: emptySet()
+        _approvedAccounts.value = HashSet(sharedPrefs.getStringSet("approved", emptySet()) ?: emptySet())
+        _rejectedAccounts.value = HashSet(sharedPrefs.getStringSet("rejected", emptySet()) ?: emptySet())
 
         healTransactions()
     }
 
+    val customCategories: StateFlow<List<String>> = repository.customCategories
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun addCustomCategory(category: String) {
+        viewModelScope.launch {
+            repository.saveCustomCategory(category)
+        }
+    }
+
     fun approveAccount(accountIdentifier: String) {
         viewModelScope.launch {
-            val updated = _approvedAccounts.value.toMutableSet().apply { add(accountIdentifier) }
-            val updatedRejected = _rejectedAccounts.value.toMutableSet().apply { remove(accountIdentifier) }
+            val updated = HashSet(_approvedAccounts.value).apply { add(accountIdentifier) }
+            val updatedRejected = HashSet(_rejectedAccounts.value).apply { remove(accountIdentifier) }
             sharedPrefs.edit().apply {
-                putStringSet("approved", updated)
-                putStringSet("rejected", updatedRejected)
-                apply()
+                putStringSet("approved", HashSet(updated))
+                putStringSet("rejected", HashSet(updatedRejected))
+                commit()
             }
             _approvedAccounts.value = updated
             _rejectedAccounts.value = updatedRejected
@@ -48,12 +63,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun rejectAccount(accountIdentifier: String) {
         viewModelScope.launch {
-            val updated = _approvedAccounts.value.toMutableSet().apply { remove(accountIdentifier) }
-            val updatedRejected = _rejectedAccounts.value.toMutableSet().apply { add(accountIdentifier) }
+            val updated = HashSet(_approvedAccounts.value).apply { remove(accountIdentifier) }
+            val updatedRejected = HashSet(_rejectedAccounts.value).apply { add(accountIdentifier) }
             sharedPrefs.edit().apply {
-                putStringSet("approved", updated)
-                putStringSet("rejected", updatedRejected)
-                apply()
+                putStringSet("approved", HashSet(updated))
+                putStringSet("rejected", HashSet(updatedRejected))
+                commit()
             }
             _approvedAccounts.value = updated
             _rejectedAccounts.value = updatedRejected
@@ -62,12 +77,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetAccountStatus(accountIdentifier: String) {
         viewModelScope.launch {
-            val updated = _approvedAccounts.value.toMutableSet().apply { remove(accountIdentifier) }
-            val updatedRejected = _rejectedAccounts.value.toMutableSet().apply { remove(accountIdentifier) }
+            val updated = HashSet(_approvedAccounts.value).apply { remove(accountIdentifier) }
+            val updatedRejected = HashSet(_rejectedAccounts.value).apply { remove(accountIdentifier) }
             sharedPrefs.edit().apply {
-                putStringSet("approved", updated)
-                putStringSet("rejected", updatedRejected)
-                apply()
+                putStringSet("approved", HashSet(updated))
+                putStringSet("rejected", HashSet(updatedRejected))
+                commit()
             }
             _approvedAccounts.value = updated
             _rejectedAccounts.value = updatedRejected
@@ -79,7 +94,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             sharedPrefs.edit().apply {
                 putStringSet("approved", emptySet())
                 putStringSet("rejected", emptySet())
-                apply()
+                commit()
             }
             _approvedAccounts.value = emptySet()
             _rejectedAccounts.value = emptySet()
@@ -136,6 +151,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearCache() {
         viewModelScope.launch {
             repository.deleteAll()
+            val db = AppDatabase.getDatabase(getApplication())
+            db.categoryMappingDao().deleteAllMappings()
             sharedPrefs.edit().clear().apply()
             _approvedAccounts.value = emptySet()
             _rejectedAccounts.value = emptySet()
@@ -145,9 +162,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Updates the category of a specific transaction.
      */
-    fun updateTransactionCategory(id: Long, category: String) {
+    fun updateTransactionCategory(id: Long, category: String, beneficiary: String? = null) {
         viewModelScope.launch {
-            repository.updateTransactionCategory(id, category)
+            repository.updateTransactionCategory(id, category, beneficiary)
         }
     }
 

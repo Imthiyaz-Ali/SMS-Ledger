@@ -163,7 +163,7 @@ object NotificationHelper {
         val line2 = "Total ₹${String.format(Locale.US, "%,.2f", totalMonthSpends)} spent in $monthLabel"
         val line3 = if (isFirstVisit) "Your 1st visit here 🏅" else "Visit frequency updated."
 
-        val bigText = "$titleText\n$line2\n$line3"
+        val bigText = "$line2\n$line3"
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_alert_custom) // Custom alert (red circle exclamation) we generated

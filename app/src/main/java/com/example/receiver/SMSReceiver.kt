@@ -32,20 +32,15 @@ class SMSReceiver : BroadcastReceiver() {
                     scope.launch {
                         try {
                             val db = AppDatabase.getDatabase(context)
-                            val dao = db.transactionDao()
-                            dao.insertTransaction(parsed)
-                            
-                            try {
-                                com.example.data.TransactionRepository(dao).reconcileCreditCardPayments()
-                            } catch (e: Exception) {
-                                Log.e("SMSReceiver", "Error reconciling credit card payments", e)
-                            }
+                            val repo = com.example.data.TransactionRepository(db.transactionDao(), db.categoryMappingDao())
+                            repo.insert(parsed)
+                            val mappedTx = repo.applyCategoryMapping(parsed)
 
                             // Trigger dynamic notify
-                            if (parsed.type == "Reminder") {
-                                NotificationHelper.showDueReminderNotification(context, parsed, 2)
+                            if (mappedTx.type == "Reminder") {
+                                NotificationHelper.showDueReminderNotification(context, mappedTx, 2)
                             } else {
-                                NotificationHelper.showTransactionNotification(context, parsed)
+                                NotificationHelper.showTransactionNotification(context, mappedTx)
                             }
                         } catch (e: Exception) {
                             Log.e("SMSReceiver", "Failed to cache parsed transaction", e)
