@@ -157,6 +157,21 @@ class ExampleUnitTest {
       assertParsedEquals("category", "Bills", it.category)
     }
   }
+
+  @Test
+  fun testIciciCreditNeftFormat() {
+    val sms = "ICICI Bank Account XX555 credited:Rs. 1,07,033.00 on 31-Aug-26. Info NEFT-CHASH00057045688-Cogniz. Available Balance is Rs. 1,16,315.82."
+    val result = TransactionParser.parseSms(sms, 1780850000000L, "VA-ICICIT-S")
+    
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("amount", 107033.00, it.amount)
+      assertParsedEquals("type", "Credit", it.type)
+      assertParsedEquals("accountIdentifier", "ICICI X555", it.accountIdentifier)
+      assertParsedEquals("beneficiary", "Cogniz", it.beneficiary)
+      assertParsedEquals("remainingBalance", 116315.82, it.remainingBalance)
+    }
+  }
 }
 
 

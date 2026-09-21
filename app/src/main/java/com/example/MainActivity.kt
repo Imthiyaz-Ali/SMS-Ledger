@@ -42,6 +42,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -84,10 +86,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme {
+            val themeMode by viewModel.themeMode.collectAsState()
+            MyApplicationTheme(themeMode = themeMode) {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    containerColor = NearBlackBackground
+                    containerColor = MaterialTheme.colorScheme.background
                 ) { innerPadding ->
                     SMSLedgerApp(
                         viewModel = viewModel,
@@ -171,10 +174,13 @@ fun SMSLedgerApp(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val themeMode by viewModel.themeMode.collectAsState()
     val transactions by viewModel.transactions.collectAsState()
     val accountBalances by viewModel.accountBalances.collectAsState()
     val approvedAccounts by viewModel.approvedAccounts.collectAsState()
     val rejectedAccounts by viewModel.rejectedAccounts.collectAsState()
+    val monthlyBudgetLimit by viewModel.monthlyBudgetLimit.collectAsState()
+    var showSetBudgetDialog by remember { mutableStateOf(false) }
 
     // Screen State selector (0 = Home/Dashboard, 1 = Analysis/Detailed, 2 = Trends)
     var currentScreenTabIndex by remember { mutableStateOf(0) }
@@ -244,7 +250,7 @@ fun SMSLedgerApp(
     val currentMonthExpenses = remember(transactions) {
         transactions.filter { tx ->
             val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-            format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
+            format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Remainder" && tx.type != "Not a Transaction" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
         }.sumOf { it.amount }
     }
 
@@ -258,7 +264,7 @@ fun SMSLedgerApp(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(NearBlackBackground)
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Column(
             modifier = Modifier.fillMaxSize()
@@ -305,6 +311,8 @@ fun SMSLedgerApp(
                         }
 
                         DashboardMainScreen(
+                            themeMode = themeMode,
+                            onThemeChange = { viewModel.setThemeMode(it) },
                             transactions = transactions,
                             accountBalances = uniqueCreditedBalances,
                             approvedAccounts = approvedAccounts,
@@ -314,6 +322,8 @@ fun SMSLedgerApp(
                             onResetAllAccounts = { viewModel.resetAllAccountStatuses() },
                             totalExpenses = currentMonthExpenses,
                             totalIncome = currentMonthIncome,
+                            monthlyBudgetLimit = monthlyBudgetLimit,
+                            onSetBudgetClick = { showSetBudgetDialog = true },
                             hasSMSPermission = hasSMSPermission,
                         onRequestPermission = {
                             val permissions = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
@@ -413,7 +423,7 @@ fun SMSLedgerApp(
                             
                             when (selectedAnalysisTypeFilter) {
                                 "Expenses" -> {
-                                    baseTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }
+                                    baseTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Remainder" && it.type != "Not a Transaction" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }
                                 }
                                 "Income" -> {
                                     baseTxs.filter { it.type == "Credit" && !it.category.equals("Transfer", ignoreCase = true) }
@@ -428,7 +438,7 @@ fun SMSLedgerApp(
                                 }
                                 else -> {
                                     if (selectedFilterDateKey != null || selectedFilterMonthLabel != null) {
-                                        filteredTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
+                                        filteredTxs.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Remainder" && it.type != "Not a Transaction" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
                                     } else {
                                         currentMonthExpenses
                                     }
@@ -438,6 +448,8 @@ fun SMSLedgerApp(
                         AnalysisDetailedScreen(
                             transactions = filteredTxs,
                             totalExpenses = filteredAmount,
+                            monthlyBudgetLimit = monthlyBudgetLimit,
+                            onSetBudgetClick = { showSetBudgetDialog = true },
                             selectedFilterMonthLabel = selectedFilterMonthLabel,
                             selectedFilterDateKey = selectedFilterDateKey,
                             onClearFilter = { 
@@ -460,6 +472,8 @@ fun SMSLedgerApp(
                         transactions = transactions,
                         totalExpenses = currentMonthExpenses,
                         totalIncome = currentMonthIncome,
+                        monthlyBudgetLimit = monthlyBudgetLimit,
+                        onSetBudgetClick = { showSetBudgetDialog = true },
                         onReviewMonth = { monthLabel, typeFilter ->
                             selectedFilterMonthLabel = monthLabel
                             selectedFilterDateKey = null
@@ -475,8 +489,8 @@ fun SMSLedgerApp(
                 modifier = Modifier
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.navigationBars),
-                color = LightCharcoalSurface,
-                border = BorderStroke(1.dp, BorderOutline)
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Row(
                     modifier = Modifier
@@ -515,8 +529,8 @@ fun SMSLedgerApp(
                     showBottomSheet = false
                     selectedTransaction = null
                 },
-                containerColor = LightCharcoalSurface,
-                contentColor = PureWhiteText,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 tonalElevation = 16.dp,
                 sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             ) {
@@ -551,8 +565,8 @@ fun SMSLedgerApp(
                         showBottomSheet = true
                     }
                 },
-                containerColor = LightCharcoalSurface,
-                contentColor = PureWhiteText,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 tonalElevation = 16.dp
             ) {
                 TypeSelectionSheet(
@@ -597,8 +611,8 @@ fun SMSLedgerApp(
                         showBottomSheet = true
                     }
                 },
-                containerColor = LightCharcoalSurface,
-                contentColor = PureWhiteText,
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
                 tonalElevation = 16.dp
             ) {
                 CategoriesSelectionSheet(
@@ -661,20 +675,20 @@ fun SMSLedgerApp(
                     Text(
                         text = "Update Past Transactions?",
                         fontWeight = FontWeight.Bold,
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 },
                 text = {
                     Text(
                         text = "You changed the category of '$cleanName' to '${info.newCategory}'.\n\nWould you like to also update all ${info.priorTransactions.size} past transaction(s) with the same beneficiary to this category?",
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 },
                 confirmButton = {
                     Button(
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MintLimePrimary,
-                            contentColor = DarkGreenOnPrimary
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
                         ),
                         onClick = {
                             viewModel.updateTransactionCategory(info.transaction.id, info.newCategory, info.transaction.beneficiary)
@@ -701,7 +715,7 @@ fun SMSLedgerApp(
                                 showCategorySheetForTransaction = info.transaction
                             }
                         ) {
-                            Text("Cancel", color = MutedGreyText)
+                            Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         TextButton(
@@ -714,13 +728,13 @@ fun SMSLedgerApp(
                                 }
                             }
                         ) {
-                            Text("Only This", color = MintLimePrimary)
+                            Text("Only This", color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 },
-                containerColor = LightCharcoalSurface,
-                textContentColor = PureWhiteText,
-                titleContentColor = PureWhiteText
+                containerColor = MaterialTheme.colorScheme.surface,
+                textContentColor = MaterialTheme.colorScheme.onSurface,
+                titleContentColor = MaterialTheme.colorScheme.onSurface
             )
         }
     }
@@ -732,6 +746,8 @@ fun SMSLedgerApp(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardMainScreen(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    onThemeChange: (ThemeMode) -> Unit = {},
     transactions: List<TransactionSMS>,
     accountBalances: List<AccountBalance>,
     approvedAccounts: Set<String>,
@@ -741,6 +757,8 @@ fun DashboardMainScreen(
     onResetAllAccounts: () -> Unit,
     totalExpenses: Double,
     totalIncome: Double,
+    monthlyBudgetLimit: Double = 50000.0,
+    onSetBudgetClick: () -> Unit = {},
     hasSMSPermission: Boolean,
     onRequestPermission: () -> Unit,
     onScanClick: () -> Unit,
@@ -773,7 +791,7 @@ fun DashboardMainScreen(
         val upcomingYear = upcomingCal.get(Calendar.YEAR)
         val upcomingMonth = upcomingCal.get(Calendar.MONTH)
 
-        val allReminders = transactions.filter { it.type == "Reminder" }
+        val allReminders = transactions.filter { it.type == "Reminder" || it.type == "Remainder" }
         val grouped = allReminders.groupBy { formatYesBankBeneficiary(it.beneficiary) }
         
         val activeCurrent = mutableListOf<TransactionSMS>()
@@ -826,7 +844,7 @@ fun DashboardMainScreen(
     }
 
     val topFive = remember(transactions) {
-        transactions.filter { it.type != "Reminder" }.take(5)
+        transactions.filter { it.type != "Reminder" && it.type != "Remainder" && it.type != "Not a Transaction" }.take(5)
     }
 
     val pastRemindersGrouped = remember(pastReminders) {
@@ -861,7 +879,7 @@ fun DashboardMainScreen(
             
             val totalOnDay = transactions.filter { tx ->
                 val txDateKey = sdf.format(Date(tx.timestamp))
-                txDateKey == dateKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
+                txDateKey == dateKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Remainder" && tx.type != "Not a Transaction" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
             }.sumOf { it.amount }
             
             DailySpendData(
@@ -901,8 +919,8 @@ fun DashboardMainScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 8.dp)
-                        .background(LightCharcoalSurface, RoundedCornerShape(12.dp))
-                        .border(1.dp, BorderOutline, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -915,7 +933,7 @@ fun DashboardMainScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Exit Search",
-                            tint = MintLimePrimary,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -926,8 +944,8 @@ fun DashboardMainScreen(
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 8.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = PureWhiteText),
-                        cursorBrush = SolidColor(MintLimePrimary),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         singleLine = true,
                         decorationBox = { innerTextField ->
                             Box(modifier = Modifier.fillMaxWidth()) {
@@ -935,7 +953,7 @@ fun DashboardMainScreen(
                                     Text(
                                         "Search categories, merchants, text...",
                                         style = MaterialTheme.typography.bodyMedium,
-                                        color = MutedGreyText
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 innerTextField()
@@ -950,7 +968,7 @@ fun DashboardMainScreen(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Clear search",
-                                tint = MutedGreyText,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -969,18 +987,18 @@ fun DashboardMainScreen(
                             Text(
                                 text = "Hi ",
                                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                                color = PureWhiteText
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "Imthiyaz",
                                 style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MintLimePrimary
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                         Text(
                             text = "Your June snapshot is complete",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MutedGreyText
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
@@ -989,16 +1007,46 @@ fun DashboardMainScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        var showThemeDialog by remember { mutableStateOf(false) }
+
+                        IconButton(
+                            onClick = { showThemeDialog = true },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("theme_toggle_button")
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
+                        ) {
+                            val themeIcon = when (themeMode) {
+                                ThemeMode.DARK -> Icons.Default.DarkMode
+                                ThemeMode.LIGHT -> Icons.Default.LightMode
+                                ThemeMode.SYSTEM -> Icons.Default.BrightnessAuto
+                            }
+                            Icon(
+                                imageVector = themeIcon,
+                                contentDescription = "Theme Settings",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        if (showThemeDialog) {
+                            ThemeSelectionDialog(
+                                currentThemeMode = themeMode,
+                                onThemeSelected = { onThemeChange(it) },
+                                onDismiss = { showThemeDialog = false }
+                            )
+                        }
+
                         IconButton(
                             onClick = { isSearchActive = true },
                             modifier = Modifier
                                 .size(36.dp)
-                                .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Search,
                                 contentDescription = "Search Logs",
-                                tint = PureWhiteText,
+                                tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -1013,12 +1061,12 @@ fun DashboardMainScreen(
                             },
                             modifier = Modifier
                                 .size(36.dp)
-                                .background(Color.White.copy(alpha = 0.05f), CircleShape)
+                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "Scan SMS Inbox",
-                                tint = MintLimePrimary,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -1034,7 +1082,7 @@ fun DashboardMainScreen(
                     text = if (searchQuery.isEmpty()) "Search Transactions" else "Search Results (${searchResults.size} found)",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = PureWhiteText,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                 )
             }
@@ -1046,8 +1094,8 @@ fun DashboardMainScreen(
                             .fillMaxWidth()
                             .padding(vertical = 12.dp),
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                        border = BorderStroke(1.dp, BorderOutline)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                     ) {
                         Column(
                             modifier = Modifier
@@ -1059,20 +1107,20 @@ fun DashboardMainScreen(
                             Icon(
                                 imageVector = Icons.Default.Search,
                                 contentDescription = null,
-                                tint = MutedGreyText.copy(alpha = 0.5f),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                                 modifier = Modifier.size(48.dp)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "Type above to search transactions",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = PureWhiteText
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "Search by category, amount, merchant, or SMS text description",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MutedGreyText,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
                             )
                         }
@@ -1093,8 +1141,8 @@ fun DashboardMainScreen(
                             .fillMaxWidth()
                             .padding(vertical = 12.dp),
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                        border = BorderStroke(1.dp, BorderOutline)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                     ) {
                         Column(
                             modifier = Modifier
@@ -1106,20 +1154,20 @@ fun DashboardMainScreen(
                             Icon(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = null,
-                                tint = MutedGreyText.copy(alpha = 0.5f),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                                 modifier = Modifier.size(48.dp)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "No results found",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = PureWhiteText
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "No transactions match your query '$searchQuery'",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MutedGreyText,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
                             )
                         }
@@ -1133,9 +1181,9 @@ fun DashboardMainScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, BorderOutline)
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
             ) {
                 Column(
                     modifier = Modifier
@@ -1152,13 +1200,13 @@ fun DashboardMainScreen(
                             Box(
                                 modifier = Modifier
                                     .size(36.dp)
-                                    .background(MintLimePrimary.copy(alpha = 0.12f), CircleShape),
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.BarChart,
                                     contentDescription = "Weekly Tracker Icon",
-                                    tint = MintLimePrimary,
+                                    tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -1167,13 +1215,13 @@ fun DashboardMainScreen(
                                 Text(
                                     text = "WEEKLY TRACKER",
                                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
-                                    color = MutedGreyText,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
                                     text = "Daily Spends (Last 7 Days)",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MutedGreyText
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -1182,12 +1230,12 @@ fun DashboardMainScreen(
                             Text(
                                 text = String.format(Locale.getDefault(), "₹%,.0f", totalWeeklyExpenses),
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
-                                color = PureWhiteText
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "Weekly Total",
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MutedGreyText
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -1230,7 +1278,7 @@ fun DashboardMainScreen(
                                             fontSize = 9.sp,
                                             fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
                                         ),
-                                        color = if (isToday) MintLimePrimary else PureWhiteText.copy(alpha = 0.8f),
+                                        color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
                                         modifier = Modifier.padding(bottom = 4.dp),
                                         maxLines = 1
                                     )
@@ -1246,7 +1294,7 @@ fun DashboardMainScreen(
                                         .background(
                                             color = when {
                                                 item.amount == 0.0 -> Color.White.copy(alpha = 0.08f)
-                                                isToday -> MintLimePrimary
+                                                isToday -> MaterialTheme.colorScheme.primary
                                                 else -> AquaTertiary.copy(alpha = 0.85f)
                                             },
                                             shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp, bottomStart = 1.dp, bottomEnd = 1.dp)
@@ -1263,7 +1311,7 @@ fun DashboardMainScreen(
                                         lineHeight = 11.sp,
                                         fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
                                     ),
-                                    color = if (isToday) MintLimePrimary else MutedGreyText,
+                                    color = if (isToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center
                                 )
                             }
@@ -1272,7 +1320,7 @@ fun DashboardMainScreen(
                     
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    HorizontalDivider(color = BorderOutline, thickness = 1.dp)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 1.dp)
                     
                     Spacer(modifier = Modifier.height(12.dp))
                     
@@ -1286,21 +1334,21 @@ fun DashboardMainScreen(
                             Icon(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = "Daily Average Info",
-                                tint = MutedGreyText.copy(alpha = 0.6f),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = String.format(Locale.getDefault(), "Daily Average: ₹%,.0f/day", averageDailyExpenses),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MutedGreyText
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         
                         Text(
                             text = "Swipe tabs for analytics",
                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                            color = MintLimePrimary.copy(alpha = 0.7f),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                             fontWeight = FontWeight.Medium
                         )
                     }
@@ -1322,11 +1370,11 @@ fun DashboardMainScreen(
                         .weight(1f)
                         .height(48.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = LightCharcoalSurface,
-                        contentColor = MintLimePrimary
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary
                     ),
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, BorderOutline)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                     Icon(Icons.Default.Category, contentDescription = "Categories", modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
@@ -1339,11 +1387,11 @@ fun DashboardMainScreen(
                         .weight(1f)
                         .height(48.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = LightCharcoalSurface,
-                        contentColor = MintLimePrimary
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary
                     ),
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, BorderOutline)
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                     Icon(Icons.AutoMirrored.Filled.TrendingUp, contentDescription = "Trends", modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
@@ -1364,7 +1412,7 @@ fun DashboardMainScreen(
                         text = "Accounts",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     if (approvedAccounts.isNotEmpty() || rejectedAccounts.isNotEmpty()) {
@@ -1375,7 +1423,7 @@ fun DashboardMainScreen(
                             Icon(
                                 imageVector = Icons.Default.Refresh,
                                 contentDescription = "Reset Approvals",
-                                tint = MintLimePrimary,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(14.dp)
                             )
                         }
@@ -1384,7 +1432,7 @@ fun DashboardMainScreen(
                 Text(
                     text = "VIEW ALL",
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                    color = MintLimePrimary,
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable { showAllAccountsSheet = true }
                 )
@@ -1398,8 +1446,8 @@ fun DashboardMainScreen(
                         .fillMaxWidth()
                         .height(85.dp),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                    border = BorderStroke(1.dp, BorderOutline)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                     Column(
                         modifier = Modifier
@@ -1411,7 +1459,7 @@ fun DashboardMainScreen(
                         Text(
                             text = "No accounts configured yet. Seed/sync data.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MutedGreyText
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1433,8 +1481,8 @@ fun DashboardMainScreen(
                         Card(
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                            border = BorderStroke(1.dp, BorderOutline)
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                         ) {
                             if (isApproved) {
                                 Column(
@@ -1450,22 +1498,16 @@ fun DashboardMainScreen(
                                         Text(
                                             text = cleanAccName,
                                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = PureWhiteText,
+                                            color = MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .size(6.dp)
-                                                .background(MintLimePrimary, CircleShape)
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
                                         text = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
                                         style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Black),
-                                        color = MintLimePrimary
+                                        color = MaterialTheme.colorScheme.primary
                                     )
                                 }
                             } else {
@@ -1477,7 +1519,7 @@ fun DashboardMainScreen(
                                     Text(
                                         text = cleanAccName,
                                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = PureWhiteText,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -1490,35 +1532,41 @@ fun DashboardMainScreen(
                                         Text(
                                             text = "Track?",
                                             style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                            color = MutedGreyText,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.weight(1f)
                                         )
-                                        Row {
-                                            IconButton(
-                                                onClick = { onRejectAccount(accBalance.accountIdentifier) },
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
                                                 modifier = Modifier
-                                                    .size(24.dp)
-                                                    .background(Color(0xFFEF5350).copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                                    .size(28.dp)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(Color(0xFFEF5350).copy(alpha = 0.15f))
+                                                    .clickable { onRejectAccount(accBalance.accountIdentifier) },
+                                                contentAlignment = Alignment.Center
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Close,
                                                     contentDescription = "Reject",
                                                     tint = Color(0xFFEF5350),
-                                                    modifier = Modifier.size(12.dp)
+                                                    modifier = Modifier.size(14.dp)
                                                 )
                                             }
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            IconButton(
-                                                onClick = { onApproveAccount(accBalance.accountIdentifier) },
+                                            Box(
                                                 modifier = Modifier
-                                                    .size(24.dp)
-                                                    .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                                    .size(28.dp)
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                                                    .clickable { onApproveAccount(accBalance.accountIdentifier) },
+                                                contentAlignment = Alignment.Center
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Check,
                                                     contentDescription = "Approve",
-                                                    tint = MintLimePrimary,
-                                                    modifier = Modifier.size(12.dp)
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(14.dp)
                                                 )
                                             }
                                         }
@@ -1544,12 +1592,12 @@ fun DashboardMainScreen(
                     text = "Reminders",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color = PureWhiteText
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = "VIEW ALL",
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                    color = MintLimePrimary,
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable { showAllRemindersSheet = true }
                 )
@@ -1563,8 +1611,8 @@ fun DashboardMainScreen(
                         .fillMaxWidth()
                         .height(85.dp),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                    border = BorderStroke(1.dp, BorderOutline)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
                     Column(
                         modifier = Modifier
@@ -1576,7 +1624,7 @@ fun DashboardMainScreen(
                         Text(
                             text = "No active reminders found for current/upcoming month.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MutedGreyText
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1608,8 +1656,8 @@ fun DashboardMainScreen(
                                 .weight(1f)
                                 .clickable { onTransactionClick(due) },
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                            border = BorderStroke(1.dp, BorderOutline)
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                         ) {
                             Column(
                                 modifier = Modifier
@@ -1624,7 +1672,7 @@ fun DashboardMainScreen(
                                     Text(
                                         text = dueLabel,
                                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = PureWhiteText,
+                                        color = MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
@@ -1633,12 +1681,12 @@ fun DashboardMainScreen(
                                         onClick = { onUpdateReminderCompleted(due.id, true) },
                                         modifier = Modifier
                                             .size(24.dp)
-                                            .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
+                                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(6.dp))
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = "Mark as completed",
-                                            tint = MintLimePrimary,
+                                            tint = MaterialTheme.colorScheme.primary,
                                             modifier = Modifier.size(12.dp)
                                         )
                                     }
@@ -1658,7 +1706,7 @@ fun DashboardMainScreen(
                                     Text(
                                         text = customLabel,
                                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                        color = MutedGreyText,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
@@ -1691,20 +1739,20 @@ fun DashboardMainScreen(
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = "Completed",
-                            tint = MutedGreyText,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Completed Reminders (${completedRemindersCurrent.size})",
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MutedGreyText
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Icon(
                         imageVector = if (showCompletedReminders) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = "Toggle Completed Reminders",
-                        tint = MutedGreyText,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -1731,8 +1779,8 @@ fun DashboardMainScreen(
                             .padding(vertical = 4.dp)
                             .clickable { onTransactionClick(due) },
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-                        border = BorderStroke(1.dp, BorderOutline)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                     ) {
                         Row(
                             modifier = Modifier
@@ -1751,7 +1799,7 @@ fun DashboardMainScreen(
                                     Icon(
                                         imageVector = Icons.AutoMirrored.Filled.Undo,
                                         contentDescription = "Mark as active",
-                                        tint = MutedGreyText,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -1763,7 +1811,7 @@ fun DashboardMainScreen(
                                             fontWeight = FontWeight.Bold,
                                             textDecoration = TextDecoration.LineThrough
                                         ),
-                                        color = MutedGreyText,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -1771,7 +1819,7 @@ fun DashboardMainScreen(
                                     Text(
                                         text = customLabel,
                                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                        color = MutedGreyText
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -1782,7 +1830,7 @@ fun DashboardMainScreen(
                                         fontWeight = FontWeight.Black,
                                         textDecoration = TextDecoration.LineThrough
                                     ),
-                                    color = MutedGreyText
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -1805,20 +1853,20 @@ fun DashboardMainScreen(
                         Icon(
                             imageVector = Icons.Default.History,
                             contentDescription = "Past Reminders",
-                            tint = MutedGreyText,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Past Reminders (${pastReminders.size})",
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MutedGreyText
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Text(
                         text = "VIEW MORE",
                         style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                        color = MintLimePrimary,
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -1838,12 +1886,12 @@ fun DashboardMainScreen(
                     text = "Recent Activity",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = PureWhiteText
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = "SEE ALL",
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                    color = MintLimePrimary,
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable { onNavigateToTab(1) } // link immediately to screen 2
                 )
@@ -1864,7 +1912,7 @@ fun DashboardMainScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 12.dp)
-                        .background(LightCharcoalSurface, RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
                         .padding(24.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1872,20 +1920,20 @@ fun DashboardMainScreen(
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = "Empty",
-                            tint = MutedGreyText,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(36.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "No recent transactions found.",
-                            color = PureWhiteText,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "Tap the Play icon (▶) in the header to seed gorgeous template data instantly.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MutedGreyText,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
                     }
@@ -1898,8 +1946,8 @@ fun DashboardMainScreen(
     if (showAllAccountsSheet) {
         ModalBottomSheet(
             onDismissRequest = { showAllAccountsSheet = false },
-            containerColor = LightCharcoalSurface,
-            contentColor = PureWhiteText,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
             Column(
@@ -1917,13 +1965,13 @@ fun DashboardMainScreen(
                         text = "All Bank Accounts",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     IconButton(onClick = { showAllAccountsSheet = false }) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = PureWhiteText
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -1939,7 +1987,7 @@ fun DashboardMainScreen(
                             Text(
                                 text = "No configured accounts yet.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MutedGreyText
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     } else {
@@ -1953,8 +2001,8 @@ fun DashboardMainScreen(
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
-                                    border = BorderStroke(1.dp, BorderOutline)
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                                 ) {
                                     Row(
                                         modifier = Modifier
@@ -1967,26 +2015,20 @@ fun DashboardMainScreen(
                                             Text(
                                                 text = cleanAccName,
                                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = PureWhiteText
+                                                color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Spacer(modifier = Modifier.height(4.dp))
                                             Text(
                                                 text = "Updated: $lastSync",
                                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                                color = MutedGreyText
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                         Column(horizontalAlignment = Alignment.End) {
                                             Text(
                                                 text = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
                                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
-                                                color = MintLimePrimary
-                                            )
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(6.dp)
-                                                    .background(MintLimePrimary, CircleShape)
+                                                color = MaterialTheme.colorScheme.primary
                                             )
                                         }
                                     }
@@ -1995,8 +2037,8 @@ fun DashboardMainScreen(
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
-                                    border = BorderStroke(1.dp, BorderOutline)
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                                 ) {
                                     Row(
                                         modifier = Modifier
@@ -2009,46 +2051,49 @@ fun DashboardMainScreen(
                                             Text(
                                                 text = cleanAccName,
                                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = PureWhiteText
+                                                color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Spacer(modifier = Modifier.height(2.dp))
                                             Text(
                                                 text = "Track account?",
                                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
-                                                color = MutedGreyText
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
 
                                         Row(
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            IconButton(
-                                                onClick = { onRejectAccount(accBalance.accountIdentifier) },
+                                            Box(
                                                 modifier = Modifier
-                                                    .size(32.dp)
-                                                    .background(Color(0xFFEF5350).copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                                    .size(36.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(Color(0xFFEF5350).copy(alpha = 0.15f))
+                                                    .clickable { onRejectAccount(accBalance.accountIdentifier) },
+                                                contentAlignment = Alignment.Center
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Close,
                                                     contentDescription = "Reject",
                                                     tint = Color(0xFFEF5350),
-                                                    modifier = Modifier.size(16.dp)
+                                                    modifier = Modifier.size(18.dp)
                                                 )
                                             }
 
-                                            Spacer(modifier = Modifier.width(8.dp))
-
-                                            IconButton(
-                                                onClick = { onApproveAccount(accBalance.accountIdentifier) },
+                                            Box(
                                                 modifier = Modifier
-                                                    .size(32.dp)
-                                                    .background(MintLimePrimary.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                                                    .size(36.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                                                    .clickable { onApproveAccount(accBalance.accountIdentifier) },
+                                                contentAlignment = Alignment.Center
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.Check,
                                                     contentDescription = "Approve",
-                                                    tint = MintLimePrimary,
-                                                    modifier = Modifier.size(16.dp)
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
                                                 )
                                             }
                                         }
@@ -2066,8 +2111,8 @@ fun DashboardMainScreen(
     if (showAllRemindersSheet) {
         ModalBottomSheet(
             onDismissRequest = { showAllRemindersSheet = false },
-            containerColor = LightCharcoalSurface,
-            contentColor = PureWhiteText,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
             Column(
@@ -2085,13 +2130,13 @@ fun DashboardMainScreen(
                         text = "All Reminders",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     IconButton(onClick = { showAllRemindersSheet = false }) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = PureWhiteText
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -2106,7 +2151,7 @@ fun DashboardMainScreen(
                         Text(
                             text = "Active Reminders (${activeRemindersCurrent.size})",
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MintLimePrimary,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(vertical = 4.dp)
                         )
                     }
@@ -2116,14 +2161,14 @@ fun DashboardMainScreen(
                             Text(
                                 text = "No active reminders found for current/upcoming month.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MutedGreyText,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 8.dp)
                             )
                         }
                     } else {
                         items(activeRemindersCurrent) { due ->
                             val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                            val customLabel = if (due.type == "Reminder") {
+                            val customLabel = if (due.type == "Reminder" || due.type == "Remainder") {
                                 val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
                                 if (mStr.find()) {
                                     "Due by ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")}"
@@ -2142,8 +2187,8 @@ fun DashboardMainScreen(
                                         onTransactionClick(due)
                                     },
                                 shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
-                                border = BorderStroke(1.dp, BorderOutline)
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -2162,7 +2207,7 @@ fun DashboardMainScreen(
                                             Icon(
                                                 imageVector = Icons.Outlined.CheckCircle,
                                                 contentDescription = "Mark completed",
-                                                tint = MintLimePrimary.copy(alpha = 0.6f),
+                                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
                                                 modifier = Modifier.size(24.dp)
                                             )
                                         }
@@ -2171,7 +2216,7 @@ fun DashboardMainScreen(
                                             Text(
                                                 text = dueLabel,
                                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                                color = PureWhiteText
+                                                color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Spacer(modifier = Modifier.height(4.dp))
                                             Text(
@@ -2206,14 +2251,14 @@ fun DashboardMainScreen(
                             Text(
                                 text = "Completed Reminders (${completedRemindersCurrent.size})",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MutedGreyText,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 4.dp)
                             )
                         }
 
                         items(completedRemindersCurrent) { due ->
                             val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                            val customLabel = if (due.type == "Reminder") {
+                            val customLabel = if (due.type == "Reminder" || due.type == "Remainder") {
                                 val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
                                 if (mStr.find()) {
                                     "Paid (Due was ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")})"
@@ -2233,8 +2278,8 @@ fun DashboardMainScreen(
                                         onTransactionClick(due)
                                     },
                                 shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
-                                border = BorderStroke(1.dp, BorderOutline)
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -2253,7 +2298,7 @@ fun DashboardMainScreen(
                                             Icon(
                                                 imageVector = Icons.AutoMirrored.Filled.Undo,
                                                 contentDescription = "Mark active",
-                                                tint = MutedGreyText,
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.size(20.dp)
                                             )
                                         }
@@ -2265,13 +2310,13 @@ fun DashboardMainScreen(
                                                     fontWeight = FontWeight.Bold,
                                                     textDecoration = TextDecoration.LineThrough
                                                 ),
-                                                color = MutedGreyText
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                             Spacer(modifier = Modifier.height(4.dp))
                                             Text(
                                                 text = customLabel,
                                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                                color = MutedGreyText
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
                                     }
@@ -2282,7 +2327,7 @@ fun DashboardMainScreen(
                                                 fontWeight = FontWeight.Black,
                                                 textDecoration = TextDecoration.LineThrough
                                             ),
-                                            color = MutedGreyText
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
@@ -2296,7 +2341,7 @@ fun DashboardMainScreen(
                             Text(
                                 text = "Past Reminders (${pastReminders.size})",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MutedGreyText,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 4.dp)
                             )
                         }
@@ -2306,14 +2351,14 @@ fun DashboardMainScreen(
                                 Text(
                                     text = monthYearStr,
                                     style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                    color = MintLimePrimary,
+                                    color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(top = 8.dp, bottom = 4.dp, start = 4.dp)
                                 )
                             }
 
                             items(dues) { due ->
                                 val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                                val customLabel = if (due.type == "Reminder") {
+                                val customLabel = if (due.type == "Reminder" || due.type == "Remainder") {
                                     val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
                                     if (mStr.find()) {
                                         "Paid (Due was ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")})"
@@ -2333,8 +2378,8 @@ fun DashboardMainScreen(
                                             onTransactionClick(due)
                                         },
                                     shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
-                                    border = BorderStroke(1.dp, BorderOutline)
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                                 ) {
                                     Row(
                                         modifier = Modifier
@@ -2353,7 +2398,7 @@ fun DashboardMainScreen(
                                                 Icon(
                                                     imageVector = if (due.isCompleted) Icons.AutoMirrored.Filled.Undo else Icons.Default.CheckCircle,
                                                     contentDescription = "Toggle status",
-                                                    tint = MutedGreyText,
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     modifier = Modifier.size(20.dp)
                                                 )
                                             }
@@ -2365,13 +2410,13 @@ fun DashboardMainScreen(
                                                         fontWeight = FontWeight.Bold,
                                                         textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
                                                     ),
-                                                    color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                                    color = if (due.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                                                 )
                                                 Spacer(modifier = Modifier.height(4.dp))
                                                 Text(
                                                     text = customLabel,
                                                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                                    color = MutedGreyText
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
                                         }
@@ -2382,7 +2427,7 @@ fun DashboardMainScreen(
                                                     fontWeight = FontWeight.Black,
                                                     textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
                                                 ),
-                                                color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                                color = if (due.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                                             )
                                         }
                                     }
@@ -2399,8 +2444,8 @@ fun DashboardMainScreen(
     if (showPastRemindersSheet) {
         ModalBottomSheet(
             onDismissRequest = { showPastRemindersSheet = false },
-            containerColor = LightCharcoalSurface,
-            contentColor = PureWhiteText,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
             Column(
@@ -2418,13 +2463,13 @@ fun DashboardMainScreen(
                         text = "Past Reminders",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     IconButton(onClick = { showPastRemindersSheet = false }) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = PureWhiteText
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -2440,7 +2485,7 @@ fun DashboardMainScreen(
                             Text(
                                 text = "No past reminders found.",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MutedGreyText,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 8.dp)
                             )
                         }
@@ -2450,14 +2495,14 @@ fun DashboardMainScreen(
                                 Text(
                                     text = monthYearStr,
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MintLimePrimary,
+                                    color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(top = 8.dp, bottom = 4.dp, start = 4.dp)
                                 )
                             }
 
                             items(dues) { due ->
                                 val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                                val customLabel = if (due.type == "Reminder") {
+                                val customLabel = if (due.type == "Reminder" || due.type == "Remainder") {
                                     val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
                                     if (mStr.find()) {
                                         "Paid (Due was ${formatDueDateString(mStr.group(1)?.removeSuffix(".") ?: "")})"
@@ -2477,8 +2522,8 @@ fun DashboardMainScreen(
                                             onTransactionClick(due)
                                         },
                                     shape = RoundedCornerShape(12.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E24)),
-                                    border = BorderStroke(1.dp, BorderOutline)
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                                 ) {
                                     Row(
                                         modifier = Modifier
@@ -2497,7 +2542,7 @@ fun DashboardMainScreen(
                                                 Icon(
                                                     imageVector = if (due.isCompleted) Icons.AutoMirrored.Filled.Undo else Icons.Default.CheckCircle,
                                                     contentDescription = "Toggle status",
-                                                    tint = MutedGreyText,
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                     modifier = Modifier.size(20.dp)
                                                 )
                                             }
@@ -2509,13 +2554,13 @@ fun DashboardMainScreen(
                                                         fontWeight = FontWeight.Bold,
                                                         textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
                                                     ),
-                                                    color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                                    color = if (due.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                                                 )
                                                 Spacer(modifier = Modifier.height(4.dp))
                                                 Text(
                                                     text = customLabel,
                                                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                                    color = MutedGreyText
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             }
                                         }
@@ -2526,7 +2571,7 @@ fun DashboardMainScreen(
                                                     fontWeight = FontWeight.Black,
                                                     textDecoration = if (due.isCompleted) TextDecoration.LineThrough else TextDecoration.None
                                                 ),
-                                                color = if (due.isCompleted) MutedGreyText else PureWhiteText
+                                                color = if (due.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                                             )
                                         }
                                     }
@@ -2550,6 +2595,8 @@ fun DashboardMainScreen(
 fun AnalysisDetailedScreen(
     transactions: List<TransactionSMS>,
     totalExpenses: Double,
+    monthlyBudgetLimit: Double = 50000.0,
+    onSetBudgetClick: (() -> Unit)? = null,
     onTransactionClick: (TransactionSMS) -> Unit,
     onCategoryClick: ((TransactionSMS) -> Unit)? = null,
     selectedFilterMonthLabel: String? = null,
@@ -2580,12 +2627,12 @@ fun AnalysisDetailedScreen(
                     Text(
                         text = "Analytics Detail",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "A complete breakdown of structured SMS ledgers",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MutedGreyText
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 
@@ -2611,10 +2658,10 @@ fun AnalysisDetailedScreen(
                     FilledTonalButton(
                         onClick = { onClearFilter?.invoke() },
                         colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MintLimePrimary.copy(alpha = 0.15f),
-                            contentColor = MintLimePrimary
+                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            contentColor = MaterialTheme.colorScheme.primary
                         ),
-                        border = BorderStroke(1.dp, MintLimePrimary.copy(alpha = 0.5f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
                         shape = RoundedCornerShape(12.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier.height(32.dp)
@@ -2622,7 +2669,7 @@ fun AnalysisDetailedScreen(
                         Text(
                             text = "Show All ($filterText ✕)",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
-                            color = MintLimePrimary
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -2639,21 +2686,21 @@ fun AnalysisDetailedScreen(
             Column(
                 modifier = Modifier
                     .size(150.dp)
-                    .background(LightCharcoalSurface, CircleShape)
-                    .border(1.2.dp, BorderOutline, CircleShape),
+                    .background(MaterialTheme.colorScheme.surface, CircleShape)
+                    .border(1.2.dp, MaterialTheme.colorScheme.outline, CircleShape),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 Box(
                     modifier = Modifier
                         .size(30.dp)
-                        .background(MintLimePrimary.copy(alpha = 0.12f), CircleShape),
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.CallMade,
                         contentDescription = "outfacing arrow",
-                        tint = MintLimePrimary,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(14.dp)
                     )
                 }
@@ -2666,15 +2713,80 @@ fun AnalysisDetailedScreen(
                 Text(
                     text = labelText,
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
-                    color = MutedGreyText,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = String.format(Locale.getDefault(), "₹%,.0f", totalExpenses),
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
-                    color = PureWhiteText
+                    color = MaterialTheme.colorScheme.onSurface
                 )
+            }
+        }
+
+        // Monthly Budget Tracker Bar
+        val progress = if (monthlyBudgetLimit > 0) (totalExpenses / monthlyBudgetLimit).coerceIn(0.0, 1.0).toFloat() else 0f
+        val isOver = totalExpenses > monthlyBudgetLimit
+        val remaining = monthlyBudgetLimit - totalExpenses
+
+        Surface(
+            onClick = { onSetBudgetClick?.invoke() },
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccountBalanceWallet,
+                            contentDescription = "Budget Icon",
+                            tint = Color(0xFF9EA7FC),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Budget: ₹" + String.format(Locale.US, "%,.0f", totalExpenses) + " / ₹" + String.format(Locale.US, "%,.0f", monthlyBudgetLimit),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = if (isOver) Color(0xFFFF5252) else if (progress >= 0.85f) Color(0xFFFFB74D) else MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = if (isOver) "Over budget" else "₹" + String.format(Locale.US, "%,.0f", remaining) + " left",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = if (isOver) Color(0xFFFF5252) else MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "Edit limit ✎",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
@@ -2682,16 +2794,16 @@ fun AnalysisDetailedScreen(
         TabRow(
             selectedTabIndex = subTabState,
             containerColor = Color.Transparent,
-            contentColor = MintLimePrimary,
+            contentColor = MaterialTheme.colorScheme.primary,
             indicator = { tabPositions ->
                 if (subTabState < tabPositions.size) {
                     TabRowDefaults.SecondaryIndicator(
                         modifier = Modifier.tabIndicatorOffset(tabPositions[subTabState]),
-                        color = MintLimePrimary
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             },
-            divider = { HorizontalDivider(color = BorderOutline) }
+            divider = { HorizontalDivider(color = MaterialTheme.colorScheme.outline) }
         ) {
             Tab(
                 selected = subTabState == 0,
@@ -2721,7 +2833,7 @@ fun AnalysisDetailedScreen(
             when (subTabState) {
                 0 -> { // Transactions list
                     val nonReminderTransactions = remember(transactions) {
-                        transactions.filter { it.type != "Reminder" }
+                        transactions.filter { it.type != "Reminder" && it.type != "Remainder" && it.type != "Not a Transaction" }
                     }
                     if (nonReminderTransactions.isNotEmpty()) {
                         LazyColumn(
@@ -2796,15 +2908,15 @@ fun AnalysisDetailedScreen(
         val cat = currentCatDetail
         val catTransactions = remember(transactions, cat.category) {
             transactions.filter { tx ->
-                tx.category.equals(cat.category, ignoreCase = true) && tx.type != "Reminder"
+                tx.category.equals(cat.category, ignoreCase = true) && tx.type != "Reminder" && tx.type != "Remainder" && tx.type != "Not a Transaction"
             }
         }
         ModalBottomSheet(
             onDismissRequest = {
                 selectedCategoryForDetail = null
             },
-            containerColor = LightCharcoalSurface,
-            contentColor = PureWhiteText,
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 16.dp,
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
@@ -2859,12 +2971,12 @@ fun AnalysisDetailedScreen(
                             Text(
                                 text = cat.category,
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = PureWhiteText
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = "${catTransactions.size} transactions",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MutedGreyText
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -2877,7 +2989,7 @@ fun AnalysisDetailedScreen(
                 }
 
                 HorizontalDivider(
-                    color = BorderOutline,
+                    color = MaterialTheme.colorScheme.outline,
                     thickness = 1.dp,
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
@@ -2908,7 +3020,7 @@ fun AnalysisDetailedScreen(
                         Text(
                             text = "No transactions found in this category",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MutedGreyText
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -2967,12 +3079,12 @@ fun DonutChartView(
         Text(
             text = categories.size.toString(),
             style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Black),
-            color = PureWhiteText
+            color = MaterialTheme.colorScheme.onSurface
         )
         Text(
             text = "Categories",
             style = MaterialTheme.typography.labelSmall,
-            color = MutedGreyText
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -2985,8 +3097,8 @@ fun CategoryCardView(cat: CategoryAgg, onClick: (() -> Unit)? = null) {
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-        border = BorderStroke(1.dp, BorderOutline)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
         Row(
             modifier = Modifier
@@ -3034,12 +3146,12 @@ fun CategoryCardView(cat: CategoryAgg, onClick: (() -> Unit)? = null) {
                     Text(
                         text = cat.category,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "${cat.count} spent events",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MutedGreyText
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -3059,8 +3171,8 @@ fun MerchantCardView(merchant: MerchantAgg) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = LightCharcoalSurface),
-        border = BorderStroke(1.dp, BorderOutline)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
         Row(
             modifier = Modifier
@@ -3076,13 +3188,13 @@ fun MerchantCardView(merchant: MerchantAgg) {
                 Box(
                     modifier = Modifier
                         .size(36.dp)
-                        .background(MintLimePrimary.copy(alpha = 0.10f), RoundedCornerShape(8.dp)),
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), RoundedCornerShape(8.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.Storefront,
                         contentDescription = "Merchant icon",
-                        tint = MintLimePrimary,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -3090,12 +3202,12 @@ fun MerchantCardView(merchant: MerchantAgg) {
                     Text(
                         text = merchant.merchant,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = "${merchant.count} interactions",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MutedGreyText
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -3103,7 +3215,7 @@ fun MerchantCardView(merchant: MerchantAgg) {
             Text(
                 text = String.format(Locale.getDefault(), "₹%,.2f", merchant.amount),
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                color = PureWhiteText
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
     }
@@ -3117,6 +3229,8 @@ fun AdvancedTrendsScreen(
     transactions: List<TransactionSMS>,
     totalExpenses: Double,
     totalIncome: Double,
+    monthlyBudgetLimit: Double = 50000.0,
+    onSetBudgetClick: () -> Unit = {},
     onReviewMonth: (String, String) -> Unit
 ) {
     val monthlyTrendList = remember(transactions) { getMonthlyTrendData(transactions) }
@@ -3138,7 +3252,7 @@ fun AdvancedTrendsScreen(
 
     // Dynamic metrics calculated for the selected month
     val selectedSpends = remember(selectedMonthTransactions) {
-        selectedMonthTransactions.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
+        selectedMonthTransactions.filter { it.type != "Credit" && it.type != "Reminder" && it.type != "Remainder" && it.type != "Not a Transaction" && it.type != "Credit Card Payment" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
     }
     val selectedIncome = remember(selectedMonthTransactions) {
         selectedMonthTransactions.filter { it.type == "Credit" && !it.category.equals("Transfer", ignoreCase = true) }.sumOf { it.amount }
@@ -3167,7 +3281,7 @@ fun AdvancedTrendsScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = PureWhiteText
+                    tint = MaterialTheme.colorScheme.onSurface
                 )
             }
             Spacer(modifier = Modifier.width(16.dp))
@@ -3177,7 +3291,7 @@ fun AdvancedTrendsScreen(
                     fontWeight = FontWeight.Bold,
                     fontSize = 19.sp
                 ),
-                color = PureWhiteText
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
 
@@ -3255,7 +3369,7 @@ fun AdvancedTrendsScreen(
                         Text(
                             text = yLabel,
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                            color = MutedGreyText,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.width(46.dp),
                             maxLines = 1
                         )
@@ -3264,7 +3378,7 @@ fun AdvancedTrendsScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .height(1.dp)
-                                .background(BorderOutline.copy(alpha = 0.25f))
+                                .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f))
                         )
                     }
                 }
@@ -3289,6 +3403,8 @@ fun AdvancedTrendsScreen(
 
                     // Bottom elements inside the scroll container
                     Column(modifier = Modifier.width(totalWidth)) {
+                        val linePrimaryColor = MaterialTheme.colorScheme.primary
+                        val lineOnSurfaceColor = MaterialTheme.colorScheme.onSurface
                         // Custom drawing canvas
                         Canvas(
                             modifier = Modifier
@@ -3329,7 +3445,7 @@ fun AdvancedTrendsScreen(
                                 }
                                 drawPath(
                                     path = path,
-                                    color = MintLimePrimary,
+                                    color = linePrimaryColor,
                                     style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
                                 )
                             }
@@ -3342,7 +3458,7 @@ fun AdvancedTrendsScreen(
                                 // If this label matches the selected one, draw a vertical highlight
                                 if (d.monthLabel == selectedMonthLabel) {
                                     drawRoundRect(
-                                        color = Color.White.copy(alpha = 0.08f),
+                                        color = lineOnSurfaceColor.copy(alpha = 0.08f),
                                         topLeft = Offset(i * columnWidthPx, 0f),
                                         size = Size(columnWidthPx, canvasHeight + 20.dp.toPx()),
                                         cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
@@ -3351,13 +3467,13 @@ fun AdvancedTrendsScreen(
 
                                 // Neon Circle Mark for Income nodes
                                 drawCircle(
-                                    color = MintLimePrimary,
+                                    color = linePrimaryColor,
                                     radius = 6.dp.toPx(),
                                     center = Offset(cx, cy)
                                 )
                                 // Inner white dot outline
                                 drawCircle(
-                                    color = Color.White,
+                                    color = lineOnSurfaceColor,
                                     radius = 2.dp.toPx(),
                                     center = Offset(cx, cy)
                                 )
@@ -3386,7 +3502,7 @@ fun AdvancedTrendsScreen(
                                             fontSize = 11.sp,
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                         ),
-                                        color = if (isSelected) MintLimePrimary else MutedGreyText
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -3415,7 +3531,7 @@ fun AdvancedTrendsScreen(
                                         modifier = Modifier
                                             .align(Alignment.TopCenter)
                                             .offset(x = (-15).dp, y = spendsOffset)
-                                            .background(Color(0xFF151926).copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
                                             .padding(horizontal = 3.dp, vertical = 1.dp)
                                     ) {
                                         Text(
@@ -3440,7 +3556,7 @@ fun AdvancedTrendsScreen(
                                         modifier = Modifier
                                             .align(Alignment.TopCenter)
                                             .offset(x = 15.dp, y = incomeOffset)
-                                            .background(Color(0xFF151926).copy(alpha = 0.85f), RoundedCornerShape(4.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
                                             .padding(horizontal = 3.dp, vertical = 1.dp)
                                     ) {
                                         Text(
@@ -3449,7 +3565,7 @@ fun AdvancedTrendsScreen(
                                                 fontSize = 8.sp,
                                                 fontWeight = FontWeight.Black
                                             ),
-                                            color = MintLimePrimary,
+                                            color = MaterialTheme.colorScheme.primary,
                                             maxLines = 1
                                         )
                                     }
@@ -3510,12 +3626,12 @@ fun AdvancedTrendsScreen(
                     fontWeight = FontWeight.Bold,
                     fontSize = 24.sp
                 ),
-                color = PureWhiteText
+                color = MaterialTheme.colorScheme.onSurface
             )
             Box(
                 modifier = Modifier
-                    .background(LightCharcoalSurface, RoundedCornerShape(24.dp))
-                    .border(1.dp, BorderOutline.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(24.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
                     .clickable {
                         Toast.makeText(context, "Account filters click. Toggle display standard sets.", Toast.LENGTH_SHORT).show()
                     }
@@ -3525,13 +3641,13 @@ fun AdvancedTrendsScreen(
                     Text(
                         text = "All accounts",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = PureWhiteText
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.ArrowDropDown,
                         contentDescription = "Dropdown",
-                        tint = MutedGreyText,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -3551,8 +3667,8 @@ fun AdvancedTrendsScreen(
                     .weight(1.15f)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(24.dp))
-                    .background(Color(0xFF262C40)) // gorgeous deep blue-grey container
-                    .border(1.dp, Color(0xFF333D66), RoundedCornerShape(24.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant) // gorgeous deep blue-grey container
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
                     .clickable {
                         onReviewMonth(selectedMonthLabel, "Expenses")
                     }
@@ -3594,13 +3710,13 @@ fun AdvancedTrendsScreen(
                             Text(
                                 text = "Spends",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = MutedGreyText
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Icon(
                             imageVector = Icons.Default.ArrowOutward,
                             contentDescription = "Trend up-right arrow",
-                            tint = MutedGreyText,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -3614,7 +3730,7 @@ fun AdvancedTrendsScreen(
                                 fontWeight = FontWeight.Black,
                                 fontSize = 21.sp
                             ),
-                            color = PureWhiteText
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -3633,8 +3749,8 @@ fun AdvancedTrendsScreen(
                         .fillMaxWidth()
                         .weight(1f)
                         .clip(RoundedCornerShape(18.dp))
-                        .background(Color(0xFF1B3D28)) // Rich forest emerald
-                        .border(1.dp, Color(0xFF2E633C).copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer) // Rich forest emerald
+                        .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
                         .clickable {
                             onReviewMonth(selectedMonthLabel, "Income")
                         }
@@ -3653,26 +3769,26 @@ fun AdvancedTrendsScreen(
                                 Box(
                                     modifier = Modifier
                                         .size(6.dp)
-                                        .background(MintLimePrimary, CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary, CircleShape)
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text(
                                     text = "Income",
                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                    color = MintLimePrimary
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = String.format(Locale.getDefault(), "₹ %,.0f", selectedIncome),
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black),
-                                color = MintLimePrimary
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                         Icon(
                             imageVector = Icons.Default.VisibilityOff,
                             contentDescription = "Hidden balance toggle icon",
-                            tint = MintLimePrimary,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp).clickable {
                                 Toast.makeText(context, "Balance hidden/shown", Toast.LENGTH_SHORT).show()
                             }
@@ -3680,46 +3796,111 @@ fun AdvancedTrendsScreen(
                     }
                 }
 
-                // Set Monthly Budget Card
+                // Interactive Monthly Budget Tracking Card
+                val spent = selectedSpends
+                val limit = monthlyBudgetLimit
+                val progress = if (limit > 0) (spent / limit).coerceIn(0.0, 1.0).toFloat() else 0f
+                val isOverBudget = spent > limit
+                val remaining = limit - spent
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
                         .clip(RoundedCornerShape(18.dp))
-                        .background(LightCharcoalSurface)
-                        .border(1.dp, BorderOutline.copy(alpha = 0.3f), RoundedCornerShape(18.dp))
-                        .clickable {
-                            Toast.makeText(context, "Set monthly budget target flow initialized", Toast.LENGTH_SHORT).show()
-                        }
-                        .padding(12.dp)
+                        .background(
+                            if (isOverBudget) Color(0xFF3E1B1B)
+                            else MaterialTheme.colorScheme.surface
+                        )
+                        .border(
+                            1.dp,
+                            if (isOverBudget) Color(0xFFFF5252).copy(alpha = 0.6f)
+                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            RoundedCornerShape(18.dp)
+                        )
+                        .clickable { onSetBudgetClick() }
+                        .padding(10.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxSize(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f)),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (isOverBudget) Color(0xFFFF5252).copy(alpha = 0.2f)
+                                            else Color(0xFF9EA7FC).copy(alpha = 0.15f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AccountBalanceWallet,
+                                        contentDescription = "Budget Icon",
+                                        tint = if (isOverBudget) Color(0xFFFF5252) else Color(0xFF9EA7FC),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Monthly Budget",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                             Icon(
-                                imageVector = Icons.Default.AccountBalanceWallet,
-                                contentDescription = "Budget Icon",
-                                tint = Color(0xFF9EA7FC),
-                                modifier = Modifier.size(14.dp)
+                                imageVector = Icons.Default.Edit,
+                                contentDescription = "Edit budget limit",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(13.dp)
                             )
                         }
-                        Text(
-                            text = "Set monthly\nbudget",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                lineHeight = 14.sp
-                            ),
-                            color = PureWhiteText
-                        )
+
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (isOverBudget) "Over by ₹" + String.format(Locale.US, "%,.0f", spent - limit)
+                                           else "₹" + String.format(Locale.US, "%,.0f", remaining) + " left",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    ),
+                                    color = if (isOverBudget) Color(0xFFFF5252) else MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "${(progress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(3.dp))
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp)),
+                                color = when {
+                                    isOverBudget -> Color(0xFFFF5252)
+                                    progress >= 0.85f -> Color(0xFFFFB74D)
+                                    else -> MaterialTheme.colorScheme.primary
+                                },
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            )
+                        }
                     }
                 }
             }
@@ -3737,8 +3918,8 @@ fun AdvancedTrendsScreen(
                 .padding(bottom = 16.dp)
                 .height(48.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = MintLimePrimary,
-                contentColor = DarkGreenOnPrimary
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
             ),
             shape = RoundedCornerShape(24.dp)
         ) {
@@ -3765,93 +3946,100 @@ fun TransactionListItemRow(
     modifier: Modifier = Modifier,
     onIconClick: (() -> Unit)? = null
 ) {
-    Row(
+    Surface(
         modifier = modifier
             .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
     ) {
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onClick() }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Circle supporting category-specific icon tinted dynamically
-            val (icon, color) = remember(tx.category) {
-                getCategoryAsset(tx.category)
-            }
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(CircleShape)
-                    .background(color.copy(alpha = 0.12f), CircleShape)
-                    .border(1.dp, color.copy(alpha = 0.25f), CircleShape)
-                    .then(
-                        if (onIconClick != null) {
-                            Modifier.clickable { onIconClick() }
-                        } else {
-                            Modifier
-                        }
-                    ),
-                contentAlignment = Alignment.Center
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.weight(1f)
             ) {
-                when (icon) {
-                    is CategoryIcon.Vector -> {
-                        Icon(
-                            imageVector = icon.imageVector,
-                            contentDescription = tx.category,
-                            tint = color,
-                            modifier = Modifier.size(20.dp)
-                        )
+                // Circle supporting category-specific icon tinted dynamically
+                val (icon, color) = remember(tx.category) {
+                    getCategoryAsset(tx.category)
+                }
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(color.copy(alpha = 0.15f), CircleShape)
+                        .border(1.dp, color.copy(alpha = 0.3f), CircleShape)
+                        .then(
+                            if (onIconClick != null) {
+                                Modifier.clickable { onIconClick() }
+                            } else {
+                                Modifier
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    when (icon) {
+                        is CategoryIcon.Vector -> {
+                            Icon(
+                                imageVector = icon.imageVector,
+                                contentDescription = tx.category,
+                                tint = color,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        is CategoryIcon.Character -> {
+                            Text(
+                                text = icon.char.toString(),
+                                color = color,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp
+                            )
+                        }
+                        is CategoryIcon.OthersSpecial -> {
+                            OthersIcon(size = 20.dp)
+                        }
                     }
-                    is CategoryIcon.Character -> {
-                        Text(
-                            text = icon.char.toString(),
-                            color = color,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
-                        )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = formatYesBankBeneficiary(tx.beneficiary),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    val dateFormatted = remember(tx.timestamp) {
+                        SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(tx.timestamp))
                     }
-                    is CategoryIcon.OthersSpecial -> {
-                        OthersIcon(size = 20.dp)
-                    }
+                    Text(
+                        text = dateFormatted,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = formatYesBankBeneficiary(tx.beneficiary),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                    color = PureWhiteText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                // Large styled date below description
-                val dateFormatted = remember(tx.timestamp) {
-                    SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(tx.timestamp))
-                }
-                Text(
-                    text = dateFormatted,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MutedGreyText
-                )
-            }
+            val isTransfer = tx.category.equals("Transfer", ignoreCase = true)
+            val isCredit = tx.type == "Credit"
+            val labelPrefix = if (isTransfer) "⇄ " else if (isCredit) "+" else "-"
+            val textColorVal = if (isTransfer) MaterialTheme.colorScheme.secondary else if (isCredit) MaterialTheme.colorScheme.primary else Color(0xFFEF5350)
+
+            Text(
+                text = String.format(Locale.getDefault(), "%s₹%,.0f", labelPrefix, tx.amount),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                color = textColorVal
+            )
         }
-
-        // Amount colored appropriately: transfer is violet, credit is green, others are red
-        val isTransfer = tx.category.equals("Transfer", ignoreCase = true)
-        val isCredit = tx.type == "Credit"
-        val labelPrefix = if (isTransfer) "⇄ " else if (isCredit) "+" else "-"
-        val textColorVal = if (isTransfer) Color(0xFFD0BCFF) else if (isCredit) Color(0xFF66BB6A) else Color(0xFFFF5252)
-
-        Text(
-            text = String.format(Locale.getDefault(), "%s₹%,.0f", labelPrefix, tx.amount),
-            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Black),
-            color = textColorVal
-        )
     }
 }
 
@@ -3867,32 +4055,37 @@ fun UnifiedBottomNavItem(
     Column(
         modifier = modifier
             .testTag("nav_item_${label.lowercase()}")
+            .clip(RoundedCornerShape(16.dp))
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Box(
             modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
                 .background(
-                    if (active) MintLimePrimary.copy(alpha = 0.15f) else Color.Transparent,
-                    shape = RoundedCornerShape(12.dp)
+                    if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
                 )
-                .padding(horizontal = 20.dp, vertical = 8.dp),
+                .then(
+                    if (active) Modifier.border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                    else Modifier
+                )
+                .padding(horizontal = 22.dp, vertical = 6.dp),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = if (active) MintLimePrimary else MutedGreyText.copy(alpha = 0.60f),
-                modifier = Modifier.size(20.dp)
+                tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.70f),
+                modifier = Modifier.size(22.dp)
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-            color = if (active) MintLimePrimary else MutedGreyText,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, letterSpacing = 0.3.sp),
+            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = if (active) FontWeight.Bold else FontWeight.Medium
         )
     }
@@ -3924,7 +4117,7 @@ fun ParsedTransactionDetailSheet(
             Text(
                 text = "Parsed SMS Data",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                color = PureWhiteText
+                color = MaterialTheme.colorScheme.onSurface
             )
             IconButton(
                 onClick = onDismiss,
@@ -3935,7 +4128,7 @@ fun ParsedTransactionDetailSheet(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Close Sheet",
-                    tint = PureWhiteText,
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -3946,7 +4139,7 @@ fun ParsedTransactionDetailSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.White.copy(alpha = 0.02f), RoundedCornerShape(16.dp))
-                .border(1.dp, BorderOutline, RoundedCornerShape(16.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -3957,7 +4150,7 @@ fun ParsedTransactionDetailSheet(
             SheetDetailRow(
                 label = "Parsed Amount",
                 value = String.format(Locale.getDefault(), "₹%,.2f", transaction.amount),
-                valueColor = MintLimePrimary
+                valueColor = MaterialTheme.colorScheme.primary
             )
             SheetDetailRow(
                 label = "Beneficiary",
@@ -3979,14 +4172,14 @@ fun ParsedTransactionDetailSheet(
                 Text(
                     text = "Type",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MutedGreyText
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     val typeValue = if (isSheetTxTransfer) "Transfer" else transaction.type
-                    val typeColor = if (isSheetTxTransfer) Color(0xFFD0BCFF) else if (transaction.type == "Credit") Color(0xFF66BB6A) else if (transaction.type == "Reminder") Color(0xFFFF8A80) else if (transaction.type == "Credit Card Payment") Color(0xFFFFB74D) else Color(0xFFFF5252)
+                    val typeColor = if (isSheetTxTransfer) MaterialTheme.colorScheme.secondary else if (transaction.type == "Credit") MaterialTheme.colorScheme.primary else if (transaction.type == "Reminder") Color(0xFFFF8A80) else if (transaction.type == "Credit Card Payment") Color(0xFFFFB74D) else Color(0xFFEF5350)
                     Text(
                         text = typeValue,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
@@ -3995,7 +4188,7 @@ fun ParsedTransactionDetailSheet(
                     Icon(
                         imageVector = Icons.Default.ChevronRight,
                         contentDescription = "Edit Type",
-                        tint = MutedGreyText,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -4011,7 +4204,7 @@ fun ParsedTransactionDetailSheet(
                 Text(
                     text = "Category Mapping",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MutedGreyText
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -4049,12 +4242,12 @@ fun ParsedTransactionDetailSheet(
                     Text(
                         text = transaction.category,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MintLimePrimary
+                        color = MaterialTheme.colorScheme.primary
                     )
                     Icon(
                         imageVector = Icons.Default.ChevronRight,
                         contentDescription = "Edit Category",
-                        tint = MutedGreyText,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -4071,7 +4264,7 @@ fun ParsedTransactionDetailSheet(
         Text(
             text = "ORIGINAL RECEIVED SMS BODY",
             style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.1.sp),
-            color = MutedGreyText,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -4079,7 +4272,7 @@ fun ParsedTransactionDetailSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color.Black.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-                .border(1.dp, BorderOutline, RoundedCornerShape(12.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
                 .padding(14.dp)
         ) {
             Text(
@@ -4088,7 +4281,7 @@ fun ParsedTransactionDetailSheet(
                     fontFamily = FontFamily.Monospace,
                     lineHeight = 18.sp
                 ),
-                color = PureWhiteText.copy(alpha = 0.9f)
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
             )
         }
 
@@ -4099,7 +4292,7 @@ fun ParsedTransactionDetailSheet(
 fun SheetDetailRow(
     label: String,
     value: String,
-    valueColor: Color = PureWhiteText
+    valueColor: Color = Color.Unspecified
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -4109,12 +4302,12 @@ fun SheetDetailRow(
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = MutedGreyText
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-            color = valueColor,
+            color = if (valueColor != Color.Unspecified) valueColor else MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -4164,10 +4357,10 @@ fun CategoryGridItem(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .background(if (isSelected) Color(0xFF1E2F1E) else Color.Transparent) // Dark translucent green highlight
+            .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent)
             .border(
                 width = if (isSelected) 1.dp else 0.dp,
-                color = if (isSelected) Color(0xFF3E8E41) else Color.Transparent,
+                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
                 shape = RoundedCornerShape(12.dp)
             )
             .padding(vertical = 6.dp, horizontal = 4.dp),
@@ -4226,7 +4419,7 @@ fun CategoryGridItem(
                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                 fontSize = 13.sp
             ),
-            color = PureWhiteText,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -4258,13 +4451,13 @@ fun TypeSelectionSheet(
     onTypeSelected: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val types = listOf("Credit", "Debit", "EMI", "SIP")
+    val types = listOf("Credit", "Debit", "Not a Transaction", "EMI", "SIP")
     
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.navigationBars)
-            .background(LightCharcoalSurface)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(top = 12.dp, bottom = 24.dp, start = 16.dp, end = 16.dp)
     ) {
         // Top Row: Close "X" Button and Title
@@ -4283,7 +4476,7 @@ fun TypeSelectionSheet(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Close",
-                    tint = PureWhiteText,
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -4293,7 +4486,7 @@ fun TypeSelectionSheet(
             Text(
                 text = "Change Transaction Type",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                color = PureWhiteText
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
 
@@ -4302,7 +4495,7 @@ fun TypeSelectionSheet(
             modifier = Modifier.fillMaxWidth()
         ) {
             items(types) { type ->
-                val isSelected = type == selectedType
+                val isSelected = type == selectedType || (type == "Not a Transaction" && (selectedType == "Remainder" || selectedType == "Reminder" || selectedType == "Not a Transaction"))
                 
                 Surface(
                     onClick = { onTypeSelected(type) },
@@ -4310,7 +4503,7 @@ fun TypeSelectionSheet(
                     color = if (isSelected) Color.White.copy(alpha = 0.08f) else Color.Transparent,
                     border = BorderStroke(
                         width = 1.dp,
-                        color = if (isSelected) MintLimePrimary else Color.White.copy(alpha = 0.05f)
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.05f)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -4321,18 +4514,22 @@ fun TypeSelectionSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val displayType = if (type == "Debit") "Debit (Expense)" else type
+                        val displayType = when (type) {
+                            "Debit" -> "Debit (Expense)"
+                            "Not a Transaction" -> "Not a Transaction"
+                            else -> type
+                        }
                         Text(
                             text = displayType,
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = if (isSelected) MintLimePrimary else PureWhiteText
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                         )
                         
                         if (isSelected) {
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = "Selected",
-                                tint = MintLimePrimary,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -4373,7 +4570,7 @@ fun CategoriesSelectionSheet(
         modifier = Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.navigationBars)
-            .background(LightCharcoalSurface)
+            .background(MaterialTheme.colorScheme.surface)
             .padding(top = 12.dp, bottom = 24.dp, start = 16.dp, end = 16.dp)
     ) {
         // Top Row: Close "X" Button and Title
@@ -4392,7 +4589,7 @@ fun CategoriesSelectionSheet(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Close",
-                    tint = PureWhiteText,
+                    tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -4400,7 +4597,7 @@ fun CategoriesSelectionSheet(
             Text(
                 text = "Categories",
                 style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                color = PureWhiteText
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
 
@@ -4429,8 +4626,8 @@ fun CategoriesSelectionSheet(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Color(0xFF2C2C2E), RoundedCornerShape(14.dp))
-                .border(1.dp, BorderOutline, RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -4443,17 +4640,17 @@ fun CategoriesSelectionSheet(
             BasicTextField(
                 value = newCategoryText,
                 onValueChange = { newCategoryText = it },
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = PureWhiteText),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 modifier = Modifier.weight(1f),
                 singleLine = true,
-                cursorBrush = SolidColor(MintLimePrimary),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 decorationBox = { innerTextField ->
                     Box(modifier = Modifier.fillMaxWidth()) {
                         if (newCategoryText.isEmpty()) {
                             Text(
                                 "New category",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MutedGreyText
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         innerTextField()
@@ -4474,7 +4671,7 @@ fun CategoriesSelectionSheet(
                     Icon(
                         imageVector = Icons.Default.Check,
                         contentDescription = "Save category",
-                        tint = MintLimePrimary,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -4485,7 +4682,7 @@ fun CategoriesSelectionSheet(
 
 // Helpers for list aggregations inside Detailed Analysis
 fun getCategorySpendList(transactions: List<TransactionSMS>): List<CategoryAgg> {
-    val grouped = transactions.groupBy { it.category }
+    val grouped = transactions.filter { it.type != "Reminder" && it.type != "Remainder" && it.type != "Not a Transaction" }.groupBy { it.category }
 
     return grouped.map { (cat, list) ->
         val details = getCategoryAsset(cat)
@@ -4500,7 +4697,7 @@ fun getCategorySpendList(transactions: List<TransactionSMS>): List<CategoryAgg> 
 }
 
 fun getMerchantSpendList(transactions: List<TransactionSMS>): List<MerchantAgg> {
-    val grouped = transactions.groupBy { it.beneficiary }
+    val grouped = transactions.filter { it.type != "Reminder" && it.type != "Remainder" && it.type != "Not a Transaction" }.groupBy { it.beneficiary }
 
     return grouped.map { (merch, list) ->
         MerchantAgg(
@@ -4509,6 +4706,237 @@ fun getMerchantSpendList(transactions: List<TransactionSMS>): List<MerchantAgg> 
             count = list.size
         )
     }.sortedByDescending { it.amount }
+}
+
+@Composable
+fun SetBudgetDialog(
+    currentBudget: Double,
+    onSaveBudget: (Double) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var budgetText by remember {
+        mutableStateOf(if (currentBudget > 0) String.format(Locale.US, "%.0f", currentBudget) else "50000")
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AccountBalanceWallet,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Text(
+                    text = "Set Monthly Budget",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(
+                    text = "Set your target monthly expense limit. Your debited transactions will be tracked against this budget.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = budgetText,
+                    onValueChange = { budgetText = it.filter { char -> char.isDigit() } },
+                    label = { Text("Monthly Limit (₹)") },
+                    prefix = { Text("₹ ", fontWeight = FontWeight.Bold) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                Text(
+                    text = "Quick Presets:",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    listOf(25000, 50000, 75000, 100000).forEach { preset ->
+                        val isSelected = budgetText == preset.toString()
+                        Surface(
+                            onClick = { budgetText = preset.toString() },
+                            shape = RoundedCornerShape(20.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                        ) {
+                            Text(
+                                text = "₹${preset / 1000}k",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val amount = budgetText.toDoubleOrNull() ?: currentBudget
+                    if (amount > 0) {
+                        onSaveBudget(amount)
+                        onDismiss()
+                    }
+                },
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Save Limit")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+fun ThemeSelectionDialog(
+    currentThemeMode: ThemeMode,
+    onThemeSelected: (ThemeMode) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Choose Theme",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                ThemeOptionItem(
+                    title = "Dark Mode",
+                    subtitle = "Always use dark theme",
+                    icon = Icons.Default.DarkMode,
+                    isSelected = currentThemeMode == ThemeMode.DARK,
+                    onClick = {
+                        onThemeSelected(ThemeMode.DARK)
+                        onDismiss()
+                    }
+                )
+                ThemeOptionItem(
+                    title = "Light Mode",
+                    subtitle = "Always use light theme",
+                    icon = Icons.Default.LightMode,
+                    isSelected = currentThemeMode == ThemeMode.LIGHT,
+                    onClick = {
+                        onThemeSelected(ThemeMode.LIGHT)
+                        onDismiss()
+                    }
+                )
+                ThemeOptionItem(
+                    title = "System Default",
+                    subtitle = "Follow system appearance",
+                    icon = Icons.Default.BrightnessAuto,
+                    isSelected = currentThemeMode == ThemeMode.SYSTEM,
+                    onClick = {
+                        onThemeSelected(ThemeMode.SYSTEM)
+                        onDismiss()
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
+    )
+}
+
+@Composable
+fun ThemeOptionItem(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("theme_option_${title.lowercase().replace(" ", "_")}")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Column {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            RadioButton(
+                selected = isSelected,
+                onClick = onClick,
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = MaterialTheme.colorScheme.primary,
+                    unselectedColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            )
+        }
+    }
 }
 
 // Empty state loader placeholder
@@ -4524,20 +4952,20 @@ fun EmptyStatePlaceholder() {
         Icon(
             imageVector = Icons.Default.Inbox,
             contentDescription = "Inbox empty",
-            tint = MutedGreyText.copy(alpha = 0.2f),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f),
             modifier = Modifier.size(56.dp)
         )
         Spacer(modifier = Modifier.height(10.dp))
         Text(
             text = "Aggregated details is empty",
-            color = PureWhiteText,
+            color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = "Sync required or seed sample messages back on Home view.",
-            color = MutedGreyText,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center
         )
@@ -4565,7 +4993,7 @@ fun getMonthlyTrendData(transactions: List<TransactionSMS>): List<MonthlyTrendDa
     }
 
     for (tx in transactions) {
-        if (tx.type == "Reminder" || tx.type == "Credit Card Payment") continue
+        if (tx.type == "Reminder" || tx.type == "Remainder" || tx.type == "Not a Transaction" || tx.type == "Credit Card Payment") continue
         if (tx.category.equals("Transfer", ignoreCase = true)) continue
         val txCal = Calendar.getInstance().apply { timeInMillis = tx.timestamp }
         val m = format.format(txCal.time)

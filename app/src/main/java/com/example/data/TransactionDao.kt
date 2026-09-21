@@ -36,6 +36,9 @@ interface TransactionDao {
     @Delete
     suspend fun deleteTransaction(transaction: TransactionSMS)
 
+    @Update
+    suspend fun updateTransaction(transaction: TransactionSMS)
+
     @Query("UPDATE transactions SET category = :category WHERE id = :id")
     suspend fun updateTransactionCategory(id: Long, category: String)
 
@@ -44,6 +47,9 @@ interface TransactionDao {
     
     @Query("UPDATE transactions SET isCompleted = :isCompleted WHERE id = :id")
     suspend fun updateTransactionCompleted(id: Long, isCompleted: Boolean)
+
+    @Query("UPDATE transactions SET accountIdentifier = :accountIdentifier WHERE id = :id")
+    suspend fun updateTransactionAccount(id: Long, accountIdentifier: String)
 
     @Query("UPDATE transactions SET category = :category WHERE LOWER(beneficiary) = LOWER(:beneficiary) AND timestamp < :timestamp")
     suspend fun updatePastTransactionsCategory(beneficiary: String, timestamp: Long, category: String)
@@ -54,7 +60,7 @@ interface TransactionDao {
     @Query("""
         SELECT category, SUM(amount) as totalSpend, COUNT(id) as count 
         FROM transactions 
-        WHERE timestamp >= :startOfMonth AND timestamp <= :endOfMonth AND type != 'Credit' AND type != 'Reminder' AND type != 'Credit Card Payment' AND LOWER(category) != 'transfer'
+        WHERE timestamp >= :startOfMonth AND timestamp <= :endOfMonth AND type != 'Credit' AND type != 'Reminder' AND type != 'Remainder' AND type != 'Not a Transaction' AND type != 'Credit Card Payment' AND LOWER(category) != 'transfer'
         GROUP BY category
     """)
     fun getMonthlySpendsByCategory(startOfMonth: Long, endOfMonth: Long): Flow<List<CategorySpend>>
@@ -62,7 +68,7 @@ interface TransactionDao {
     @Query("SELECT COUNT(id) FROM transactions WHERE LOWER(beneficiary) = LOWER(:beneficiary)")
     suspend fun getTransactionCountForBeneficiary(beneficiary: String): Int
 
-    @Query("SELECT SUM(amount) FROM transactions WHERE timestamp >= :startOfMonth AND timestamp <= :endOfMonth AND type != 'Credit' AND type != 'Reminder' AND type != 'Credit Card Payment' AND LOWER(category) != 'transfer'")
+    @Query("SELECT SUM(amount) FROM transactions WHERE timestamp >= :startOfMonth AND timestamp <= :endOfMonth AND type != 'Credit' AND type != 'Reminder' AND type != 'Remainder' AND type != 'Not a Transaction' AND type != 'Credit Card Payment' AND LOWER(category) != 'transfer'")
     suspend fun getTotalSpendsForMonth(startOfMonth: Long, endOfMonth: Long): Double?
 
     @Query("""

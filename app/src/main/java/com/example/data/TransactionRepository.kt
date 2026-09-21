@@ -1,6 +1,8 @@
 package com.example.data
 
+import com.example.utils.TransactionParser
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 class TransactionRepository(
     private val transactionDao: TransactionDao,
@@ -10,7 +12,37 @@ class TransactionRepository(
 
     val allTransactions: Flow<List<TransactionSMS>> = transactionDao.getAllTransactions()
     
-    val accountBalances: Flow<List<AccountBalance>> = transactionDao.getLatestAccountBalances()
+    val accountBalances: Flow<List<AccountBalance>> = transactionDao.getLatestAccountBalances().map { list ->
+        list.mapNotNull { acc ->
+            val cleanIdentifier = TransactionParser.standardizeAccountIdentifier(acc.accountIdentifier)
+            if (cleanIdentifier.isBlank() || 
+                cleanIdentifier.equals("Unknown Account", ignoreCase = true) || 
+                cleanIdentifier.endsWith("0000")) {
+                null
+            } else {
+                acc.copy(accountIdentifier = cleanIdentifier)
+            }
+        }
+        .groupBy { it.accountIdentifier }
+        .map { (_, accList) ->
+            accList.maxByOrNull { it.lastUpdated } ?: accList.first()
+        }
+        .sortedBy { it.accountIdentifier }
+    }
+
+    suspend fun sanitizeDatabaseAccounts() {
+        try {
+            val allTx = transactionDao.getAllTransactionsList()
+            for (tx in allTx) {
+                val stdAccount = TransactionParser.standardizeAccountIdentifier(tx.accountIdentifier)
+                if (stdAccount != tx.accountIdentifier) {
+                    transactionDao.updateTransactionAccount(tx.id, stdAccount)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("TransactionRepository", "Error sanitizing database accounts", e)
+        }
+    }
 
     val customCategories: Flow<List<String>> = customCategoryDao?.getAllCustomCategoriesFlow() 
         ?: kotlinx.coroutines.flow.flowOf(emptyList())
@@ -229,13 +261,16 @@ class TransactionRepository(
         
         // 3. Perform bulk DB operations
         if (toDelete.isNotEmpty()) {
-            for (del in toDelete) {
-                transactionDao.deleteTransaction(del)
+            for (del in toDelete.distinctBy { it.id }) {
+                if (del.id != 0L) {
+                    transactionDao.deleteTransaction(del)
+                }
             }
         }
         
         if (toInsert.isNotEmpty()) {
-            transactionDao.insertTransactions(toInsert)
+            val distinctToInsert = toInsert.distinctBy { it.smsUniqueId }
+            transactionDao.insertTransactions(distinctToInsert)
         }
         reconcileCreditCardPayments()
     }
@@ -298,19 +333,13 @@ class TransactionRepository(
                     tx.beneficiary.lowercase().contains("cc")
                 )
             }
-            val debits = list.filter { tx -> tx.type == "Debit" }
+            val debits = list.filter { tx -> tx.type == "Debit" }.toMutableList()
             for (reminder in reminders) {
                 val matchingDebit = debits.find { debit -> debit.amount == reminder.amount }
                 if (matchingDebit != null) {
-                    // Update debit to "Credit Card Payment"
-                    val updatedDebit = matchingDebit.copy(type = "Credit Card Payment")
-                    transactionDao.deleteTransaction(matchingDebit)
-                    transactionDao.insertTransaction(updatedDebit)
-                    
-                    // Update reminder to isCompleted = true
-                    val updatedReminder = reminder.copy(isCompleted = true)
-                    transactionDao.deleteTransaction(reminder)
-                    transactionDao.insertTransaction(updatedReminder)
+                    transactionDao.updateTransactionType(matchingDebit.id, "Credit Card Payment")
+                    transactionDao.updateTransactionCompleted(reminder.id, true)
+                    debits.remove(matchingDebit)
                 }
             }
         } catch (e: Exception) {

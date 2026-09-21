@@ -32,18 +32,24 @@ object SMSInboxReader {
             )
 
             cursor?.use { c ->
-                val bodyIndex = c.getColumnIndexOrThrow(Telephony.Sms.Inbox.BODY)
-                val dateIndex = c.getColumnIndexOrThrow(Telephony.Sms.Inbox.DATE)
-                val addressIndex = c.getColumnIndexOrThrow(Telephony.Sms.Inbox.ADDRESS)
+                val bodyIndex = c.getColumnIndex(Telephony.Sms.Inbox.BODY)
+                val dateIndex = c.getColumnIndex(Telephony.Sms.Inbox.DATE)
+                val addressIndex = c.getColumnIndex(Telephony.Sms.Inbox.ADDRESS)
 
-                while (c.moveToNext()) {
-                    val body = c.getString(bodyIndex) ?: continue
-                    val date = c.getLong(dateIndex)
-                    val sender = c.getString(addressIndex) ?: "Unknown"
+                if (bodyIndex >= 0 && dateIndex >= 0) {
+                    while (c.moveToNext()) {
+                        try {
+                            val body = c.getString(bodyIndex) ?: continue
+                            val date = c.getLong(dateIndex)
+                            val sender = if (addressIndex >= 0) c.getString(addressIndex) ?: "Unknown" else "Unknown"
 
-                    val parsed = TransactionParser.parseSms(body, date, sender)
-                    if (parsed != null) {
-                        transactions.add(parsed)
+                            val parsed = TransactionParser.parseSms(body, date, sender)
+                            if (parsed != null) {
+                                transactions.add(parsed)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("SMSInboxReader", "Error parsing row from SMS inbox", e)
+                        }
                     }
                 }
             }

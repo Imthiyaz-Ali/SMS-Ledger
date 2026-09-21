@@ -2,11 +2,13 @@ package com.example.ui
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
 import com.example.utils.SMSInboxReader
 import com.example.utils.TransactionParser
+import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -17,6 +19,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: TransactionRepository
     private val sharedPrefs = application.getSharedPreferences("account_approvals", Context.MODE_PRIVATE)
+
+    private val _themeMode = MutableStateFlow<ThemeMode>(getSavedThemeMode())
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    private fun getSavedThemeMode(): ThemeMode {
+        val saved = sharedPrefs.getString("theme_mode", ThemeMode.SYSTEM.name)
+        return try {
+            ThemeMode.valueOf(saved ?: ThemeMode.SYSTEM.name)
+        } catch (e: Exception) {
+            ThemeMode.SYSTEM
+        }
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        sharedPrefs.edit().putString("theme_mode", mode.name).apply()
+        _themeMode.value = mode
+    }
+
+    private val _monthlyBudgetLimit = MutableStateFlow<Double>(getSavedMonthlyBudgetLimit())
+    val monthlyBudgetLimit: StateFlow<Double> = _monthlyBudgetLimit.asStateFlow()
+
+    private fun getSavedMonthlyBudgetLimit(): Double {
+        return sharedPrefs.getFloat("monthly_budget_limit", 50000f).toDouble()
+    }
+
+    fun setMonthlyBudgetLimit(limit: Double) {
+        sharedPrefs.edit().putFloat("monthly_budget_limit", limit.toFloat()).apply()
+        _monthlyBudgetLimit.value = limit
+    }
 
     private val _approvedAccounts = MutableStateFlow<Set<String>>(emptySet())
     val approvedAccounts: StateFlow<Set<String>> = _approvedAccounts.asStateFlow()
@@ -34,6 +65,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         _approvedAccounts.value = HashSet(sharedPrefs.getStringSet("approved", emptySet()) ?: emptySet())
         _rejectedAccounts.value = HashSet(sharedPrefs.getStringSet("rejected", emptySet()) ?: emptySet())
+
+        viewModelScope.launch {
+            repository.sanitizeDatabaseAccounts()
+        }
 
         healTransactions()
     }
@@ -137,11 +172,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun scanDeviceInbox(context: Context, onComplete: (Int) -> Unit = {}) {
         viewModelScope.launch {
-            val inboxList = SMSInboxReader.queryInboxTransactions(context)
-            if (inboxList.isNotEmpty()) {
-                repository.insertAll(inboxList)
+            try {
+                val inboxList = SMSInboxReader.queryInboxTransactions(context)
+                if (inboxList.isNotEmpty()) {
+                    repository.insertAll(inboxList)
+                }
+                repository.sanitizeDatabaseAccounts()
+                onComplete(inboxList.size)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error scanning device inbox", e)
+                onComplete(0)
             }
-            onComplete(inboxList.size)
         }
     }
 
@@ -255,7 +296,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            repository.insertAll(parsedSamples)
+            try {
+                repository.insertAll(parsedSamples)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error seeding sample data", e)
+            }
         }
     }
 
@@ -265,10 +310,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val dao = AppDatabase.getDatabase(getApplication()).transactionDao()
                 val list = dao.getAllTransactionsList()
                 for (tx in list) {
+                    val parsed = TransactionParser.parseSms(tx.rawSms, tx.timestamp, tx.sender)
+                    if (parsed == null) {
+                        dao.deleteTransaction(tx)
+                        continue
+                    }
                     val lowerBody = tx.rawSms.lowercase()
                     if (lowerBody.contains("x3349") && lowerBody.contains("is due") && (lowerBody.contains("total due") || lowerBody.contains("min due"))) {
-                        val parsed = TransactionParser.parseSms(tx.rawSms, tx.timestamp)
-                        if (parsed != null && parsed.type == "Reminder") {
+                        if (parsed.type == "Reminder") {
                             if (tx.type != "Reminder" || tx.amount != parsed.amount || tx.beneficiary != parsed.beneficiary || tx.accountIdentifier != parsed.accountIdentifier) {
                                 val updated = tx.copy(
                                     type = "Reminder",
@@ -277,8 +326,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     beneficiary = parsed.beneficiary,
                                     accountIdentifier = parsed.accountIdentifier
                                 )
-                                dao.deleteTransaction(tx)
-                                dao.insertTransaction(updated)
+                                dao.updateTransaction(updated)
                             }
                         }
                     }

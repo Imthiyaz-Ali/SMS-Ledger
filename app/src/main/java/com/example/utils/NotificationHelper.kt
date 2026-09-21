@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.text.HtmlCompat
 import com.example.R
 import com.example.data.AppDatabase
 import com.example.data.TransactionSMS
@@ -36,7 +37,7 @@ object NotificationHelper {
     }
 
     /**
-     * Shows a notification when a new transaction is parsed.
+     * Shows a notification when a new transaction is processed.
      */
     fun showTransactionNotification(context: Context, tx: TransactionSMS) {
         createNotificationChannel(context)
@@ -44,19 +45,14 @@ object NotificationHelper {
         scope.launch {
             val db = AppDatabase.getDatabase(context)
             
-            // 1. Get total spending in June (or current month)
+            // Get total spending in current month
             val startOfMonth = getStartOfMonthTimestamp()
             val endOfMonth = getEndOfMonthTimestamp()
             val totalMonthSpends = db.transactionDao().getTotalSpendsForMonth(startOfMonth, endOfMonth) ?: 0.0
 
-            // 2. See if this is the first transaction from this beneficiary to toggle "Your 1st visit here 🏅"
-            val count = db.transactionDao().getTransactionCountForBeneficiary(tx.beneficiary)
-            val isFirstVisit = count <= 1
-
-            // 3. Post notification using standard Android APIs
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
             handler.post {
-                postNativeTransactionNotification(context, tx, totalMonthSpends, isFirstVisit)
+                postNativeTransactionNotification(context, tx, totalMonthSpends)
             }
         }
     }
@@ -74,7 +70,6 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT
         }
 
-        // Action button intents
         val markPaidIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = "com.example.ACTION_MARK_AS_PAID"
             putExtra("notification_id", notificationId)
@@ -89,27 +84,27 @@ object NotificationHelper {
         }
         val pShare = PendingIntent.getBroadcast(context, notificationId * 10 + 2, shareIntent, pendingIntentFlags)
 
-        // General Notification Click ContentIntent (Launches app)
         val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
         val pContent = PendingIntent.getActivity(context, notificationId, launchIntent, pendingIntentFlags)
 
-        // Generate clean subtext/header matching screenshot style: e.g. "ICICI personal loan (1565)" or "ICICI credit (6008)"
         val cleanSubtext = formatAccountDisplayForHeader(tx.accountIdentifier, tx.type)
 
-        val notificationTitle = "${cleanSubtext} ₹${String.format(Locale.US, "%,.2f", tx.amount)}"
+        // Amount colored in RED for due payment reminders
+        val formattedAmount = String.format(Locale.US, "%,.2f", tx.amount)
+        val titleHtml = "$cleanSubtext <font color=\"#D32F2F\"><b>₹$formattedAmount</b></font>"
+        val titleCharSequence = HtmlCompat.fromHtml(titleHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
         val notificationText = "Due in $daysRemaining days"
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_card_custom) // Custom card icon we generated
-            .setContentTitle(notificationTitle)
+            .setSmallIcon(R.drawable.ic_stat_ledger)
+            .setContentTitle(titleCharSequence)
             .setContentText(notificationText)
             .setSubText(cleanSubtext)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(pContent)
-            // Actions
-            .addAction(R.drawable.ic_card_custom, "Mark as Paid", pMarkPaid)
-            .addAction(R.drawable.ic_card_custom, "Share axio", pShare)
+            .addAction(0, "Mark as Paid", pMarkPaid)
+            .addAction(0, "Share axio", pShare)
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(notificationId, builder.build())
@@ -118,8 +113,7 @@ object NotificationHelper {
     private fun postNativeTransactionNotification(
         context: Context,
         tx: TransactionSMS,
-        totalMonthSpends: Double,
-        isFirstVisit: Boolean
+        totalMonthSpends: Double
     ) {
         val notificationId = (tx.id xor 123456).toInt()
 
@@ -129,7 +123,6 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT
         }
 
-        // Action intents
         val splitIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = "com.example.ACTION_SPLIT"
             putExtra("notification_id", notificationId)
@@ -152,32 +145,34 @@ object NotificationHelper {
         }
         val pShowSms = PendingIntent.getBroadcast(context, notificationId * 10 + 5, showSmsIntent, pendingIntentFlags)
 
-        // Main Tap launches app
         val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
         val pContent = PendingIntent.getActivity(context, notificationId, launchIntent, pendingIntentFlags)
 
         val bankHeader = formatAccountDisplayForHeader(tx.accountIdentifier, tx.type)
         val monthLabel = SimpleDateFormat("MMMM", Locale.US).format(Date(tx.timestamp))
 
-        val titleText = "₹${String.format(Locale.US, "%,.2f", tx.amount)} at ${tx.beneficiary}"
-        val line2 = "Total ₹${String.format(Locale.US, "%,.2f", totalMonthSpends)} spent in $monthLabel"
-        val line3 = if (isFirstVisit) "Your 1st visit here 🏅" else "Visit frequency updated."
+        val isCredit = tx.type == "Credit"
+        // Debit -> Vivid Red (#D32F2F), Credit -> Vivid Green (#2E7D32)
+        val amountColorHex = if (isCredit) "#2E7D32" else "#D32F2F"
+        val formattedAmount = String.format(Locale.US, "%,.2f", tx.amount)
 
-        val bigText = "$line2\n$line3"
+        val titleHtml = "<font color=\"$amountColorHex\"><b>₹$formattedAmount</b></font> at ${tx.beneficiary}"
+        val titleCharSequence = HtmlCompat.fromHtml(titleHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
+
+        val line2 = "Total ₹${String.format(Locale.US, "%,.2f", totalMonthSpends)} spent in $monthLabel"
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_alert_custom) // Custom alert (red circle exclamation) we generated
-            .setContentTitle(titleText)
+            .setSmallIcon(R.drawable.ic_stat_ledger)
+            .setContentTitle(titleCharSequence)
             .setContentText(line2)
             .setSubText(bankHeader)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(pContent)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
-            // Actions
-            .addAction(R.drawable.ic_alert_custom, "Split", pSplit)
-            .addAction(R.drawable.ic_alert_custom, "Stats", pStats)
-            .addAction(R.drawable.ic_alert_custom, "Show SMS", pShowSms)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(line2))
+            .addAction(0, "Split", pSplit)
+            .addAction(0, "Stats", pStats)
+            .addAction(0, "Show SMS", pShowSms)
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(notificationId, builder.build())
