@@ -31,20 +31,29 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
-      - name: Generate debug keystore
+      - name: Decode debug keystore
         run: |
-          keytool -genkeypair \
-            -v \
-            -keystore debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            -keypass android \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ -f debug.keystore.base64 ]; then
+            echo "Decoding persistent debug keystore from debug.keystore.base64"
+            base64 -d debug.keystore.base64 > debug.keystore
+          else
+            echo "Generating new debug keystore fallback"
+            keytool -genkeypair \
+              -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Build debug APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
         run: gradle --no-daemon assembleDebug
 
       - name: Rename APK
