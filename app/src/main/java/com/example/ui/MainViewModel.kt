@@ -66,11 +66,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _approvedAccounts.value = HashSet(sharedPrefs.getStringSet("approved", emptySet()) ?: emptySet())
         _rejectedAccounts.value = HashSet(sharedPrefs.getStringSet("rejected", emptySet()) ?: emptySet())
 
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             repository.sanitizeDatabaseAccounts()
+            healTransactions()
         }
-
-        healTransactions()
     }
 
     val customCategories: StateFlow<List<String>> = repository.customCategories
@@ -168,16 +167,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Reads inbox SMS and updates database cache.
+     * Reads inbox SMS incrementally and updates database cache.
      */
-    fun scanDeviceInbox(context: Context, onComplete: (Int) -> Unit = {}) {
-        viewModelScope.launch {
+    fun scanDeviceInbox(context: Context, forceFullScan: Boolean = false, onComplete: (Int) -> Unit = {}) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                val inboxList = SMSInboxReader.queryInboxTransactions(context)
+                val lastScan = if (forceFullScan) 0L else sharedPrefs.getLong("last_sms_scan_timestamp", 0L)
+                val sinceTimestamp = if (lastScan > 0L) (lastScan - 12 * 3600 * 1000L).coerceAtLeast(0L) else 0L
+                val scanStart = System.currentTimeMillis()
+
+                val inboxList = SMSInboxReader.queryInboxTransactions(context, sinceTimestamp)
                 if (inboxList.isNotEmpty()) {
                     repository.insertAll(inboxList)
                 }
-                repository.sanitizeDatabaseAccounts()
+                sharedPrefs.edit().putLong("last_sms_scan_timestamp", scanStart).apply()
                 onComplete(inboxList.size)
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Error scanning device inbox", e)

@@ -5,7 +5,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Build
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.text.HtmlCompat
 import com.example.R
@@ -89,17 +91,35 @@ object NotificationHelper {
 
         val cleanSubtext = formatAccountDisplayForHeader(tx.accountIdentifier, tx.type)
 
-        // Amount colored in RED for due payment reminders
         val formattedAmount = String.format(Locale.US, "%,.2f", tx.amount)
+        val notificationText = "Due in $daysRemaining days"
+        val amountColor = Color.parseColor("#D32F2F")
+
+        val collapsedViews = RemoteViews(context.packageName, R.layout.notification_transaction_collapsed).apply {
+            setTextViewText(R.id.notification_amount, "₹$formattedAmount")
+            setTextColor(R.id.notification_amount, amountColor)
+            setTextViewText(R.id.notification_merchant, " due")
+            setTextViewText(R.id.notification_total_spent, notificationText)
+        }
+
+        val expandedViews = RemoteViews(context.packageName, R.layout.notification_transaction_expanded).apply {
+            setTextViewText(R.id.notification_amount, "₹$formattedAmount")
+            setTextColor(R.id.notification_amount, amountColor)
+            setTextViewText(R.id.notification_merchant, " due")
+            setTextViewText(R.id.notification_total_spent, notificationText)
+        }
+
         val titleHtml = "$cleanSubtext <font color=\"#D32F2F\"><b>₹$formattedAmount</b></font>"
         val titleCharSequence = HtmlCompat.fromHtml(titleHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
-        val notificationText = "Due in $daysRemaining days"
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_ledger)
             .setContentTitle(titleCharSequence)
             .setContentText(notificationText)
             .setSubText(cleanSubtext)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(collapsedViews)
+            .setCustomBigContentView(expandedViews)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(pContent)
@@ -151,25 +171,43 @@ object NotificationHelper {
         val bankHeader = formatAccountDisplayForHeader(tx.accountIdentifier, tx.type)
         val monthLabel = SimpleDateFormat("MMMM", Locale.US).format(Date(tx.timestamp))
 
-        val isCredit = tx.type == "Credit"
+        val isCredit = tx.type.equals("Credit", ignoreCase = true)
         // Debit -> Vivid Red (#D32F2F), Credit -> Vivid Green (#2E7D32)
         val amountColorHex = if (isCredit) "#2E7D32" else "#D32F2F"
+        val amountColor = Color.parseColor(amountColorHex)
         val formattedAmount = String.format(Locale.US, "%,.2f", tx.amount)
 
-        val titleHtml = "<font color=\"$amountColorHex\"><b>₹$formattedAmount</b></font> at ${tx.beneficiary}"
-        val titleCharSequence = HtmlCompat.fromHtml(titleHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
-
+        val merchantText = if (tx.beneficiary.isNotBlank()) " at ${tx.beneficiary}" else ""
         val line2 = "Total ₹${String.format(Locale.US, "%,.2f", totalMonthSpends)} spent in $monthLabel"
+
+        val collapsedViews = RemoteViews(context.packageName, R.layout.notification_transaction_collapsed).apply {
+            setTextViewText(R.id.notification_amount, "₹$formattedAmount")
+            setTextColor(R.id.notification_amount, amountColor)
+            setTextViewText(R.id.notification_merchant, merchantText)
+            setTextViewText(R.id.notification_total_spent, line2)
+        }
+
+        val expandedViews = RemoteViews(context.packageName, R.layout.notification_transaction_expanded).apply {
+            setTextViewText(R.id.notification_amount, "₹$formattedAmount")
+            setTextColor(R.id.notification_amount, amountColor)
+            setTextViewText(R.id.notification_merchant, merchantText)
+            setTextViewText(R.id.notification_total_spent, line2)
+        }
+
+        val titleHtml = "<font color=\"$amountColorHex\"><b>₹$formattedAmount</b></font>$merchantText"
+        val titleCharSequence = HtmlCompat.fromHtml(titleHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_ledger)
             .setContentTitle(titleCharSequence)
             .setContentText(line2)
             .setSubText(bankHeader)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(collapsedViews)
+            .setCustomBigContentView(expandedViews)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .setContentIntent(pContent)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(line2))
             .addAction(0, "Split", pSplit)
             .addAction(0, "Stats", pStats)
             .addAction(0, "Show SMS", pShowSms)
@@ -180,7 +218,8 @@ object NotificationHelper {
 
     private fun formatAccountDisplayForHeader(accountIdentifier: String, type: String): String {
         val lowerAcc = accountIdentifier.lowercase()
-        val suffix = if (type == "Credit") "credit" else "debit"
+        val isCredit = type.equals("Credit", ignoreCase = true)
+        val suffix = if (isCredit) "credit" else "debit"
         
         // Extract last 4 numbers
         val numberPattern = java.util.regex.Pattern.compile("(\\d{4,})")
@@ -196,6 +235,9 @@ object NotificationHelper {
             lowerAcc.contains("hdfc") -> "HDFC $suffix ($digits)"
             lowerAcc.contains("yes") -> "YesBank $suffix ($digits)"
             lowerAcc.contains("icici") -> "ICICI $suffix ($digits)"
+            lowerAcc.contains("axis") -> "Axis $suffix ($digits)"
+            lowerAcc.contains("sbi") -> "SBI $suffix ($digits)"
+            lowerAcc.contains("hsbc") -> "HSBC $suffix ($digits)"
             else -> {
                 val cleanName = accountIdentifier.substringBefore("XX").trim().ifEmpty { "Bank" }
                 "$cleanName $suffix ($digits)"

@@ -399,7 +399,14 @@ object TransactionParser {
         val type = when {
             lowerBody.contains("sip") -> "SIP"
             lowerBody.contains("emi") -> "EMI"
-            lowerBody.contains("debited") -> "Debit"
+            lowerBody.contains("debited") || 
+            lowerBody.contains("debit") || 
+            lowerBody.contains("spent") || 
+            lowerBody.contains("paid") || 
+            lowerBody.contains("withdrawn") || 
+            lowerBody.contains("transferred") || 
+            lowerBody.contains("dr ") || 
+            lowerBody.contains("dr.") -> "Debit"
             lowerBody.contains("credited") || 
             lowerBody.contains("cashback") || 
             lowerBody.contains("refunded") || 

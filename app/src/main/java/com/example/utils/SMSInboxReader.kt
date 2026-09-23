@@ -11,8 +11,9 @@ object SMSInboxReader {
 
     /**
      * Reads the SMS inbox and maps matchable transactions to a list of TransactionSMS.
+     * Optionally filters messages newer than [sinceTimestamp] for fast incremental scanning.
      */
-    suspend fun queryInboxTransactions(context: Context): List<TransactionSMS> = withContext(Dispatchers.IO) {
+    suspend fun queryInboxTransactions(context: Context, sinceTimestamp: Long = 0L): List<TransactionSMS> = withContext(Dispatchers.IO) {
         val transactions = mutableListOf<TransactionSMS>()
         val contentResolver = context.contentResolver
 
@@ -22,12 +23,15 @@ object SMSInboxReader {
             Telephony.Sms.Inbox.ADDRESS
         )
 
+        val selection = if (sinceTimestamp > 0L) "${Telephony.Sms.Inbox.DATE} >= ?" else null
+        val selectionArgs = if (sinceTimestamp > 0L) arrayOf(sinceTimestamp.toString()) else null
+
         try {
             val cursor = contentResolver.query(
                 Telephony.Sms.Inbox.CONTENT_URI,
                 projection,
-                null,
-                null,
+                selection,
+                selectionArgs,
                 "${Telephony.Sms.Inbox.DATE} DESC"
             )
 

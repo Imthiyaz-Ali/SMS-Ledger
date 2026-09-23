@@ -168,21 +168,27 @@ class TransactionRepository(
         val toInsert = mutableListOf<TransactionSMS>()
         val toDelete = mutableListOf<TransactionSMS>()
         
-        // Keep track of what we decided to insert in this batch to avoid batch-internal duplicate insertions
+        // Build an indexed lookup map: (accountIdentifier, amount) -> list of transactions
+        // to avoid quadratic O(N^2) list scanning on large transaction sets
+        val candidateMap = mutableMapOf<Pair<String, Double>, MutableList<TransactionSMS>>()
+        for (tx in existingList) {
+            val key = Pair(tx.accountIdentifier, tx.amount)
+            candidateMap.getOrPut(key) { mutableListOf() }.add(tx)
+        }
+
+        // Keep track of what we decided to insert in this batch
         val batchInserted = mutableListOf<TransactionSMS>()
         
         // 2. Sort transactions chronologically (ascending) for running balance calculation
         val chronological = mappedTransactions.sortedBy { it.timestamp }
-        
         val lastKnownBalances = mutableMapOf<String, Double>()
         
         for (tx in chronological) {
-            val allCheckList = existingList + batchInserted
+            val key = Pair(tx.accountIdentifier, tx.amount)
+            val candidates = candidateMap[key] ?: emptyList()
             
-            // Filter duplicates within 1 hour
-            val duplicates = allCheckList.filter { existing ->
-                existing.amount == tx.amount &&
-                existing.accountIdentifier == tx.accountIdentifier &&
+            // Filter candidates within 1 hour
+            val duplicates = candidates.filter { existing ->
                 kotlin.math.abs(existing.timestamp - tx.timestamp) <= 3600000L
             }
             
@@ -256,6 +262,7 @@ class TransactionRepository(
                 
                 toInsert.add(resolvedTx)
                 batchInserted.add(resolvedTx)
+                candidateMap.getOrPut(key) { mutableListOf() }.add(resolvedTx)
             }
         }
         
