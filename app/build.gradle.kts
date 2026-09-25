@@ -21,12 +21,12 @@ if (!debugKeystoreFile.exists() && debugKeystoreBase64File.exists()) {
 
 android {
   namespace = "com.example"
-  compileSdk { version = release(36) { minorApiLevel = 1 } }
+  compileSdk = 36
 
   defaultConfig {
     applicationId = "com.aistudio.smsledger.app"
     minSdk = 24
-    targetSdk = 36
+    targetSdk = 35
     versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
     versionName = System.getenv("VERSION_NAME") ?: "1.0"
 

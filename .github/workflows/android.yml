@@ -43,6 +43,16 @@ jobs:
             exit 1
           fi
 
+      - name: Create .env file if missing
+        run: |
+          if [ ! -f .env ]; then
+            if [ -f .env.example ]; then
+              cp .env.example .env
+            else
+              touch .env
+            fi
+          fi
+
       - name: Build debug APK
         env:
           VERSION_CODE: ${{ github.run_number }}
