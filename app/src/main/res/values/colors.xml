@@ -7,4 +7,10 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Notification colors for Light Theme -->
+    <color name="notification_debit_color">#D32F2F</color>
+    <color name="notification_credit_color">#2E7D32</color>
+    <color name="notification_text_primary">#212121</color>
+    <color name="notification_text_secondary">#555555</color>
 </resources>

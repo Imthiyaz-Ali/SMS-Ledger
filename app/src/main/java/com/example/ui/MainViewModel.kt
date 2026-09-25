@@ -318,20 +318,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         dao.deleteTransaction(tx)
                         continue
                     }
+
+                    var updatedTx = tx
+                    var needsUpdate = false
+
+                    if (tx.beneficiary != parsed.beneficiary || 
+                        tx.accountIdentifier != parsed.accountIdentifier || 
+                        tx.amount != parsed.amount) {
+                        updatedTx = updatedTx.copy(
+                            beneficiary = parsed.beneficiary,
+                            accountIdentifier = parsed.accountIdentifier,
+                            amount = parsed.amount
+                        )
+                        needsUpdate = true
+                    }
+
                     val lowerBody = tx.rawSms.lowercase()
                     if (lowerBody.contains("x3349") && lowerBody.contains("is due") && (lowerBody.contains("total due") || lowerBody.contains("min due"))) {
                         if (parsed.type == "Reminder") {
-                            if (tx.type != "Reminder" || tx.amount != parsed.amount || tx.beneficiary != parsed.beneficiary || tx.accountIdentifier != parsed.accountIdentifier) {
-                                val updated = tx.copy(
+                            if (updatedTx.type != "Reminder" || updatedTx.category != "EMI") {
+                                updatedTx = updatedTx.copy(
                                     type = "Reminder",
-                                    category = "EMI",
-                                    amount = parsed.amount,
-                                    beneficiary = parsed.beneficiary,
-                                    accountIdentifier = parsed.accountIdentifier
+                                    category = "EMI"
                                 )
-                                dao.updateTransaction(updated)
+                                needsUpdate = true
                             }
                         }
+                    }
+
+                    if (needsUpdate) {
+                        dao.updateTransaction(updatedTx)
                     }
                 }
                 repository.reconcileCreditCardPayments()

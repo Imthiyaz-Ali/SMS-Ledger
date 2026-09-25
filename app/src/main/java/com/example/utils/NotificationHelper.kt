@@ -93,23 +93,27 @@ object NotificationHelper {
 
         val formattedAmount = String.format(Locale.US, "%,.2f", tx.amount)
         val notificationText = "Due in $daysRemaining days"
-        val amountColor = Color.parseColor("#D32F2F")
+        val colors = getNotificationColors(context, isCredit = false)
 
         val collapsedViews = RemoteViews(context.packageName, R.layout.notification_transaction_collapsed).apply {
             setTextViewText(R.id.notification_amount, "₹$formattedAmount")
-            setTextColor(R.id.notification_amount, amountColor)
+            setTextColor(R.id.notification_amount, colors.amountColor)
             setTextViewText(R.id.notification_merchant, " due")
+            setTextColor(R.id.notification_merchant, colors.primaryTextColor)
             setTextViewText(R.id.notification_total_spent, notificationText)
+            setTextColor(R.id.notification_total_spent, colors.secondaryTextColor)
         }
 
         val expandedViews = RemoteViews(context.packageName, R.layout.notification_transaction_expanded).apply {
             setTextViewText(R.id.notification_amount, "₹$formattedAmount")
-            setTextColor(R.id.notification_amount, amountColor)
+            setTextColor(R.id.notification_amount, colors.amountColor)
             setTextViewText(R.id.notification_merchant, " due")
+            setTextColor(R.id.notification_merchant, colors.primaryTextColor)
             setTextViewText(R.id.notification_total_spent, notificationText)
+            setTextColor(R.id.notification_total_spent, colors.secondaryTextColor)
         }
 
-        val titleHtml = "$cleanSubtext <font color=\"#D32F2F\"><b>₹$formattedAmount</b></font>"
+        val titleHtml = "$cleanSubtext <font color=\"${colors.amountColorHex}\"><b>₹$formattedAmount</b></font>"
         val titleCharSequence = HtmlCompat.fromHtml(titleHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -172,9 +176,7 @@ object NotificationHelper {
         val monthLabel = SimpleDateFormat("MMMM", Locale.US).format(Date(tx.timestamp))
 
         val isCredit = tx.type.equals("Credit", ignoreCase = true)
-        // Debit -> Vivid Red (#D32F2F), Credit -> Vivid Green (#2E7D32)
-        val amountColorHex = if (isCredit) "#2E7D32" else "#D32F2F"
-        val amountColor = Color.parseColor(amountColorHex)
+        val colors = getNotificationColors(context, isCredit)
         val formattedAmount = String.format(Locale.US, "%,.2f", tx.amount)
 
         val merchantText = if (tx.beneficiary.isNotBlank()) " at ${tx.beneficiary}" else ""
@@ -182,19 +184,23 @@ object NotificationHelper {
 
         val collapsedViews = RemoteViews(context.packageName, R.layout.notification_transaction_collapsed).apply {
             setTextViewText(R.id.notification_amount, "₹$formattedAmount")
-            setTextColor(R.id.notification_amount, amountColor)
+            setTextColor(R.id.notification_amount, colors.amountColor)
             setTextViewText(R.id.notification_merchant, merchantText)
+            setTextColor(R.id.notification_merchant, colors.primaryTextColor)
             setTextViewText(R.id.notification_total_spent, line2)
+            setTextColor(R.id.notification_total_spent, colors.secondaryTextColor)
         }
 
         val expandedViews = RemoteViews(context.packageName, R.layout.notification_transaction_expanded).apply {
             setTextViewText(R.id.notification_amount, "₹$formattedAmount")
-            setTextColor(R.id.notification_amount, amountColor)
+            setTextColor(R.id.notification_amount, colors.amountColor)
             setTextViewText(R.id.notification_merchant, merchantText)
+            setTextColor(R.id.notification_merchant, colors.primaryTextColor)
             setTextViewText(R.id.notification_total_spent, line2)
+            setTextColor(R.id.notification_total_spent, colors.secondaryTextColor)
         }
 
-        val titleHtml = "<font color=\"$amountColorHex\"><b>₹$formattedAmount</b></font>$merchantText"
+        val titleHtml = "<font color=\"${colors.amountColorHex}\"><b>₹$formattedAmount</b></font>$merchantText"
         val titleCharSequence = HtmlCompat.fromHtml(titleHtml, HtmlCompat.FROM_HTML_MODE_LEGACY)
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -263,5 +269,32 @@ object NotificationHelper {
         calendar.set(Calendar.SECOND, 59)
         calendar.set(Calendar.MILLISECOND, 999)
         return calendar.timeInMillis
+    }
+
+    private data class NotificationColors(
+        val amountColor: Int,
+        val amountColorHex: String,
+        val primaryTextColor: Int,
+        val secondaryTextColor: Int
+    )
+
+    private fun getNotificationColors(context: Context, isCredit: Boolean): NotificationColors {
+        val isNight = (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+        val amountColorHex = if (isNight) {
+            if (isCredit) "#81C784" else "#FF6B6B"
+        } else {
+            if (isCredit) "#2E7D32" else "#D32F2F"
+        }
+
+        val primaryTextColorHex = if (isNight) "#FFFFFF" else "#212121"
+        val secondaryTextColorHex = if (isNight) "#CCCCCC" else "#555555"
+
+        return NotificationColors(
+            amountColor = Color.parseColor(amountColorHex),
+            amountColorHex = amountColorHex,
+            primaryTextColor = Color.parseColor(primaryTextColorHex),
+            secondaryTextColor = Color.parseColor(secondaryTextColorHex)
+        )
     }
 }

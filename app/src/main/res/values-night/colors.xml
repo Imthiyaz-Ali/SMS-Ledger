@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notification colors for Dark Theme -->
+    <color name="notification_debit_color">#FF6B6B</color>
+    <color name="notification_credit_color">#81C784</color>
+    <color name="notification_text_primary">#FFFFFF</color>
+    <color name="notification_text_secondary">#CCCCCC</color>
+</resources>

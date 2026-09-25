@@ -20,7 +20,7 @@
             android:layout_height="wrap_content"
             android:textStyle="bold"
             android:textSize="17sp"
-            android:textColor="#D32F2F" />
+            android:textColor="@color/notification_debit_color" />
 
         <TextView
             android:id="@+id/notification_merchant"
@@ -29,7 +29,7 @@
             android:textSize="15sp"
             android:ellipsize="end"
             android:singleLine="true"
-            android:textColor="?android:attr/textColorPrimary" />
+            android:textColor="@color/notification_text_primary" />
     </LinearLayout>
 
     <TextView
@@ -38,5 +38,5 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:textSize="13.5sp"
-        android:textColor="?android:attr/textColorSecondary" />
+        android:textColor="@color/notification_text_secondary" />
 </LinearLayout>

@@ -47,8 +47,8 @@ object TransactionParser {
     private val PASSBOOK_BEN_PATTERN = Pattern.compile("(?i)balance\\s+against\\s+([^\\s]+)")
     private val PASSBOOK_BAL_PATTERN = Pattern.compile("(?i)balance\\s+against\\s+[^\\s]+\\s+is\\s+(?:Rs\\.?|INR|₹)?\\s*([0-9,/-]+)")
     private val FLOAT_DIGIT_PATTERN = Pattern.compile("(?<!\\d)([0-9]{1,3}(?:,[0-9]{3})*(?:\\.[0-9]{2})?)(?!\\d)")
-    private val ICICI_SPECIAL_PATTERN = Pattern.compile("(?i)on\\s+\\d{2}-[a-zA-Z0-9]{3,4}-\\d{2,4};\\s+([^.]+?)\\s+credited")
-    private val ICICI_STANDARD_PATTERN = Pattern.compile("(?i)on\\s+\\d{2}-[a-zA-Z0-9]{3,4}-\\d{2,4}\\s+([^.]+?)(?=\\s*\\.\\s*(?:Avl|Avb|To|Avail)|$)")
+    private val ICICI_SPECIAL_PATTERN = Pattern.compile("(?i)on\\s+\\d{2}-[a-zA-Z0-9]{3,4}-\\d{2,4};\\s+(?:on|at|to|for|from)?\\s*([^.]+?)\\s+credited")
+    private val ICICI_STANDARD_PATTERN = Pattern.compile("(?i)on\\s+\\d{2}-[a-zA-Z0-9]{3,4}-\\d{2,4}\\s+(?:on|at|to|for|in|from|towards|via|using)?\\s*([^.]+?)(?=\\s*\\.\\s*(?:Avl|Avb|To|Avail)|$)")
     private val ICICI_INFO_PATTERN = Pattern.compile("(?i)Info\\s+(?:[A-Za-z0-9]+[-/:]){1,3}([A-Za-z0-9\\s]+?)(?=\\.|\\s+Available|\\s+Avl|\\s+Bal|$)")
     private val FROM_PATTERN = Pattern.compile("(?i)from\\s+([^\\s]+?)(?=\\s|\\.|$)")
     private val CLEAN_PREFIX_REGEX = "(?i)\\b(X|ACC|ACCOUNT|A/C|A_C|BANK|CARD|UNIT)\\b".toRegex()
@@ -603,18 +603,47 @@ object TransactionParser {
             }
         }
 
+        // Remove leading quotes, colons, dashes, slashes, or non-alphanumeric punctuation
+        clean = clean.replace(Regex("^[\"'\\-:;,.\\s]+"), "").trim()
+
+        // Remove leading dates if candidate accidentally included date prefix (e.g. "22-Aug-26 on RELIANCE RETAIL")
+        clean = clean.replace(Regex("(?i)^\\d{1,2}[-/][a-zA-Z0-9]{2,4}[-/]\\d{2,4}\\s*"), "").trim()
+
+        // Strip leading preposition/adjective words before merchant name
+        val leadingPrefixRegex = Regex("(?i)^(?:spent\\s+at|spent\\s+on|paid\\s+to|at\\s+merchant|on\\s+merchant|info[:\\-]?|on|at|to|for|in|from|by|towards|via|using|through|vpa|upi|ref|merchant)\\s+")
+        
+        var prevLen = -1
+        while (clean.length != prevLen) {
+            prevLen = clean.length
+            clean = clean.replace(leadingPrefixRegex, "").trim()
+        }
+
         // Remove trailing commas, periods or spaces
         while (clean.endsWith(".") || clean.endsWith(",") || clean.endsWith("-") || clean.endsWith("_")) {
             clean = clean.dropLast(1).trim()
         }
+
         // Remove trailing helper words
-        val suffixes = listOf("via", "using", "on", "avl", "available", "bal", "balance", "lmt", "limit", "effective", "has")
+        val suffixes = listOf("via", "using", "on", "at", "for", "to", "in", "avl", "available", "bal", "balance", "lmt", "limit", "effective", "has")
         suffixes.forEach { suffix ->
             if (clean.lowercase().endsWith(" $suffix")) {
                 clean = clean.substring(0, clean.length - (suffix.length + 1)).trim()
             }
         }
-        return if (clean.isBlank()) "Unknown Beneficiary" else clean
+
+        // Final pass for leading prefix cleanup
+        prevLen = -1
+        while (clean.length != prevLen) {
+            prevLen = clean.length
+            clean = clean.replace(leadingPrefixRegex, "").trim()
+        }
+
+        val noiseSet = setOf("on", "at", "to", "for", "in", "from", "by", "towards", "via", "using", "through", "info", "merchant", "unknown", "ref")
+        if (clean.isBlank() || clean.lowercase() in noiseSet) {
+            return "Unknown Beneficiary"
+        }
+
+        return clean
     }
 
     private fun mapCategory(beneficiary: String, rawSms: String): String {
