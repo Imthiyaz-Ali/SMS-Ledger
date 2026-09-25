@@ -17,10 +17,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
@@ -28,8 +30,6 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
 
       - name: Decode debug keystore
         run: |
@@ -37,7 +37,7 @@ jobs:
             echo "debug.keystore already present in repo"
           elif [ -f debug.keystore.base64 ]; then
             echo "Decoding persistent debug keystore from debug.keystore.base64"
-            base64 -d debug.keystore.base64 > debug.keystore
+            base64 --decode debug.keystore.base64 > debug.keystore
           else
             echo "Error: persistent debug keystore not found!"
             exit 1
@@ -75,7 +75,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Cleaning up previous 'latest' release and tag..."
-          gh release delete latest --yes --cleanup-tag || true
+          gh release delete latest --yes --cleanup-tag --repo ${{ github.repository }} || true
 
       - name: Publish APK as the latest release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -98,7 +98,6 @@ jobs:
             2. **Google Play Protect Prompt**:
                - When side-loading an APK outside Google Play Store that requests SMS permissions, Play Protect may display an "Unrecognized app" prompt.
                - Simply tap **"More details"** and then **"Install anyway"** to complete installation.
-          target_commitish: ${{ github.sha }}
           make_latest: true
           prerelease: false
           files: app/build/outputs/apk/debug/sms_ledger.apk
