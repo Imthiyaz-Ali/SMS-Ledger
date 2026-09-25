@@ -33,21 +33,14 @@ jobs:
 
       - name: Decode debug keystore
         run: |
-          if [ -f debug.keystore.base64 ]; then
+          if [ -f debug.keystore ]; then
+            echo "debug.keystore already present in repo"
+          elif [ -f debug.keystore.base64 ]; then
             echo "Decoding persistent debug keystore from debug.keystore.base64"
             base64 -d debug.keystore.base64 > debug.keystore
           else
-            echo "Generating new debug keystore fallback"
-            keytool -genkeypair \
-              -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
+            echo "Error: persistent debug keystore not found!"
+            exit 1
           fi
 
       - name: Build debug APK
@@ -66,14 +59,35 @@ jobs:
           path: app/build/outputs/apk/debug/sms_ledger.apk
           if-no-files-found: error
 
+      - name: Delete existing latest release and tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Cleaning up previous 'latest' release and tag..."
+          gh release delete latest --yes --cleanup-tag || true
+
       - name: Publish APK as the latest release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest APK
+          name: Latest APK (Build ${{ github.run_number }})
           body: |
-            Automatically generated from commit ${{ github.sha }} on the main branch.
+            ## SMS Ledger App Release (Build ${{ github.run_number }})
+
+            Automatically generated from commit `${{ github.sha }}` on the `main` branch.
+
+            ### Download APK:
+            - Direct Download: [sms_ledger.apk](https://github.com/${{ github.repository }}/releases/download/latest/sms_ledger.apk)
+
+            ### Installation & Update Instructions:
+            1. **Updating Existing App**:
+               - This APK is signed with a unified persistent signing key. All future releases will update seamlessly over existing installations without losing any local data.
+               - *Note*: If an older build on your phone was signed with a different key prior to this fix, uninstall that old build once. All subsequent updates will update directly over this version.
+            2. **Google Play Protect Prompt**:
+               - When side-loading an APK outside Google Play Store that requests SMS permissions, Play Protect may display an "Unrecognized app" prompt.
+               - Simply tap **"More details"** and then **"Install anyway"** to complete installation.
           target_commitish: ${{ github.sha }}
           make_latest: true
           prerelease: false
