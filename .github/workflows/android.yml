@@ -30,6 +30,8 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
 
       - name: Decode debug keystore
         run: |
@@ -38,6 +40,9 @@ jobs:
           elif [ -f debug.keystore.base64 ]; then
             echo "Decoding persistent debug keystore from debug.keystore.base64"
             base64 --decode debug.keystore.base64 > debug.keystore
+          elif [ -f test_keystore.tmp ]; then
+            echo "Using test_keystore.tmp as debug.keystore"
+            cp test_keystore.tmp debug.keystore
           else
             echo "Error: persistent debug keystore not found!"
             exit 1
@@ -60,7 +65,12 @@ jobs:
         run: gradle --no-daemon assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/*.apk app/build/outputs/apk/debug/sms_ledger.apk
+        run: |
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/sms_ledger.apk
+          else
+            cp $(find app/build/outputs/apk/debug -name "*.apk" ! -name "sms_ledger.apk" | head -n 1) app/build/outputs/apk/debug/sms_ledger.apk
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -76,12 +86,14 @@ jobs:
         run: |
           echo "Cleaning up previous 'latest' release and tag..."
           gh release delete latest --yes --cleanup-tag --repo ${{ github.repository }} || true
+          git tag -d latest 2>/dev/null || true
 
       - name: Publish APK as the latest release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
+          target_commitish: ${{ github.sha }}
           name: Latest APK (Build ${{ github.run_number }})
           body: |
             ## SMS Ledger App Release (Build ${{ github.run_number }})

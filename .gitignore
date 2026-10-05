@@ -18,3 +18,5 @@ local.properties
 debug.keystore
 *.apk
 /.build-outputs/
+*.tmp
+.venv/
