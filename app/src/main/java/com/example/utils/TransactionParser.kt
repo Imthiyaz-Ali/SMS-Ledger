@@ -828,13 +828,21 @@ object TransactionParser {
         val bankKeywords = listOf("hdfc", "icici", "sbi", "axis", "yes", "kotak", "pnb", "bob", "hsbc", "citi", "paytm", "union", "boi", "canara", "idfc", "indusind", "rbl", "federal", "iob", "uco", "scb")
         val accKeywords = listOf("a/c", "acc", "account", "card", "x", "xx")
 
-        val containsBank = bankKeywords.any { lowerBeneficiary.contains(it) }
-        val containsAcc = accKeywords.any { lowerBeneficiary.contains(it) }
-        if (containsBank && containsAcc) return true
+        // Check if the BENEFICIARY itself specifies a target bank and account
+        val beneficiaryContainsBank = bankKeywords.any { lowerBeneficiary.contains(it) }
+        val beneficiaryContainsAcc = accKeywords.any { lowerBeneficiary.contains(it) }
+        if (beneficiaryContainsBank && beneficiaryContainsAcc) return true
 
-        if (lowerSms.contains("transfer") || lowerSms.contains("trf") || lowerSms.contains("sent") || lowerSms.contains("paid")) {
-            if (containsBank && (lowerSms.contains("a/c") || lowerSms.contains("acc") || lowerSms.contains("account"))) return true
+        // Check if SMS explicitly says "transfer to [bank]" or "trf to [bank]"
+        val transferToBank = bankKeywords.any { bank ->
+            lowerSms.contains("transfer to $bank") ||
+            lowerSms.contains("trf to $bank") ||
+            lowerSms.contains("transferred to $bank") ||
+            lowerSms.contains("sent to $bank") ||
+            lowerSms.contains("paid to $bank")
         }
+        if (transferToBank) return true
+
         return false
     }
 }

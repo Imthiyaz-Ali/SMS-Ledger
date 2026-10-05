@@ -1,0 +1,118 @@
+name: Android CI and Latest Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Decode debug keystore
+        run: |
+          if [ -f debug.keystore ]; then
+            echo "debug.keystore already present in workspace"
+          elif [ -f debug.keystore.base64 ]; then
+            echo "Decoding persistent debug keystore from debug.keystore.base64"
+            base64 --decode debug.keystore.base64 > debug.keystore
+          elif [ -f test_keystore.tmp ]; then
+            echo "Using test_keystore.tmp as debug.keystore"
+            cp test_keystore.tmp debug.keystore
+          else
+            echo "debug.keystore.base64 not found. Gradle build will proceed."
+          fi
+
+      - name: Create .env file if missing
+        run: |
+          if [ ! -f .env ]; then
+            if [ -f .env.example ]; then
+              cp .env.example .env
+            else
+              touch .env
+            fi
+          fi
+
+      - name: Build debug APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 1.0.${{ github.run_number }}
+        run: gradle --no-daemon assembleDebug
+
+      - name: Rename and prepare APK
+        run: |
+          APK_PATH=$(find . -type f -name "*.apk" ! -name "sms_ledger.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: No APK file found in build outputs!"
+            exit 1
+          fi
+          echo "Found APK at: $APK_PATH"
+          mkdir -p app/build/outputs/apk/debug/
+          cp "$APK_PATH" app/build/outputs/apk/debug/sms_ledger.apk
+          echo "Copied to app/build/outputs/apk/debug/sms_ledger.apk successfully."
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sms-ledger-debug-apk
+          path: app/build/outputs/apk/debug/sms_ledger.apk
+          if-no-files-found: error
+
+      - name: Delete existing latest release and tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Cleaning up previous 'latest' release and tag..."
+          gh release delete latest --yes --cleanup-tag --repo ${{ github.repository }} || true
+          git tag -d latest 2>/dev/null || true
+
+      - name: Publish APK as the latest release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          target_commitish: ${{ github.sha }}
+          name: Latest APK (Build ${{ github.run_number }})
+          body: |
+            ## SMS Ledger App Release (Build ${{ github.run_number }})
+            Automatically generated from commit `${{ github.sha }}` on the `main` branch.
+
+            ### Download APK:
+            - Direct Download: [sms_ledger.apk](https://github.com/${{ github.repository }}/releases/download/latest/sms_ledger.apk)
+
+            ### Installation & Update Instructions:
+            1. **Updating Existing App**:
+               - This APK is signed with a unified persistent signing key. All future releases will update seamlessly over existing installations without losing any local data.
+               - *Note*: If an older build on your phone was signed with a different key prior to this fix, uninstall that old build once. All subsequent updates will update directly over this version.
+            2. **Google Play Protect Prompt**:
+               - When side-loading an APK outside Google Play Store that requests SMS permissions, Play Protect may display an "Unrecognized app" prompt.
+               - Simply tap **"More details"** and then **"Install anyway"** to complete installation.
+          make_latest: true
+          prerelease: false
+          files: app/build/outputs/apk/debug/sms_ledger.apk
+          fail_on_unmatched_files: true
+          overwrite_files: true
