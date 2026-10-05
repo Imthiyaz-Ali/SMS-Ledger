@@ -18,6 +18,12 @@ data class AccountBalance(
 @Dao
 interface TransactionDao {
 
+    @Query("SELECT * FROM transactions WHERE id = :id LIMIT 1")
+    suspend fun getTransactionById(id: Long): TransactionSMS?
+
+    @Query("SELECT COUNT(id) FROM transactions WHERE type = 'Reminder' AND isCompleted = 0")
+    suspend fun getUncompletedReminderCount(): Int
+
     @Query("SELECT * FROM transactions ORDER BY timestamp DESC")
     fun getAllTransactions(): Flow<List<TransactionSMS>>
 

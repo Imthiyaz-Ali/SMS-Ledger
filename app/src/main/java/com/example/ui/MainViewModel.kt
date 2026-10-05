@@ -308,8 +308,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun healTransactions() {
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
+                val currentVersion = 3
+                val lastVersion = sharedPrefs.getInt("db_healed_version", 0)
+                if (lastVersion >= currentVersion) {
+                    // Already healed for current parser logic, only reconcile credit card payments if needed
+                    repository.reconcileCreditCardPayments()
+                    return@launch
+                }
+
                 val dao = AppDatabase.getDatabase(getApplication()).transactionDao()
                 val list = dao.getAllTransactionsList()
                 for (tx in list) {
@@ -351,6 +359,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 repository.reconcileCreditCardPayments()
+                sharedPrefs.edit().putInt("db_healed_version", currentVersion).apply()
             } catch (e: Exception) {
                 e.printStackTrace()
             }

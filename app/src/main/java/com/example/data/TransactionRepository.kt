@@ -303,7 +303,7 @@ class TransactionRepository(
         if (beneficiary != null) {
             saveCategoryMapping(beneficiary, category)
         } else {
-            val tx = transactionDao.getAllTransactionsList().find { it.id == id }
+            val tx = transactionDao.getTransactionById(id)
             if (tx != null) {
                 saveCategoryMapping(tx.beneficiary, category)
             }
@@ -329,17 +329,20 @@ class TransactionRepository(
 
     suspend fun reconcileCreditCardPayments() {
         try {
+            reconcileSelfTransfers()
+            if (transactionDao.getUncompletedReminderCount() == 0) return
             val list = transactionDao.getAllTransactionsList()
             val reminders = list.filter { tx ->
                 tx.type == "Reminder" && !tx.isCompleted && (
-                    tx.rawSms.lowercase().contains("card") ||
-                    tx.rawSms.lowercase().contains("credit") ||
-                    tx.rawSms.lowercase().contains("cc") ||
-                    tx.beneficiary.lowercase().contains("card") ||
-                    tx.beneficiary.lowercase().contains("credit") ||
-                    tx.beneficiary.lowercase().contains("cc")
+                    tx.rawSms.contains("card", ignoreCase = true) ||
+                    tx.rawSms.contains("credit", ignoreCase = true) ||
+                    tx.rawSms.contains("cc", ignoreCase = true) ||
+                    tx.beneficiary.contains("card", ignoreCase = true) ||
+                    tx.beneficiary.contains("credit", ignoreCase = true) ||
+                    tx.beneficiary.contains("cc", ignoreCase = true)
                 )
             }
+            if (reminders.isEmpty()) return
             val debits = list.filter { tx -> tx.type == "Debit" }.toMutableList()
             for (reminder in reminders) {
                 val matchingDebit = debits.find { debit -> debit.amount == reminder.amount }
@@ -351,6 +354,72 @@ class TransactionRepository(
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    suspend fun reconcileSelfTransfers() {
+        try {
+            val list = transactionDao.getAllTransactionsList()
+            if (list.isEmpty()) return
+
+            val knownAccounts = list.map { it.accountIdentifier.lowercase().trim() }
+                .filter { it.isNotBlank() && !it.contains("unknown") }
+                .toSet()
+
+            val debits = list.filter { it.type == "Debit" }
+            val credits = list.filter { it.type == "Credit" }
+
+            val toUpdateToTransfer = mutableSetOf<TransactionSMS>()
+
+            // 1. Single transaction pattern check (beneficiary or SMS mentions another user account or self transfer)
+            for (tx in list) {
+                if (tx.category == "Transfer") continue
+
+                val lowerBen = tx.beneficiary.lowercase().trim()
+                val lowerSms = tx.rawSms.lowercase()
+
+                val isSelfTransferKeyword = lowerBen.contains("self") || 
+                        lowerBen.contains("own account") || 
+                        lowerBen.contains("own a/c") ||
+                        lowerSms.contains("self transfer") ||
+                        lowerSms.contains("transfer to own") ||
+                        lowerSms.contains("transfer to self") ||
+                        lowerSms.contains("own account") ||
+                        lowerSms.contains("own a/c") ||
+                        lowerSms.contains("trf to own") ||
+                        lowerSms.contains("trf to self") ||
+                        lowerSms.contains("internal transfer") ||
+                        lowerSms.contains("linked account") ||
+                        lowerSms.contains("linked acct")
+
+                val matchesAnotherAccount = knownAccounts.any { acc ->
+                    acc != tx.accountIdentifier.lowercase().trim() && 
+                    (lowerBen.contains(acc) || lowerSms.contains(acc))
+                }
+
+                if (isSelfTransferKeyword || matchesAnotherAccount) {
+                    toUpdateToTransfer.add(tx.copy(category = "Transfer"))
+                }
+            }
+
+            // 2. Pair matching between Debit on Account A and Credit on Account B within 15 mins
+            for (debit in debits) {
+                val matchingCredit = credits.find { credit ->
+                    credit.accountIdentifier != debit.accountIdentifier &&
+                    kotlin.math.abs(credit.amount - debit.amount) < 0.01 &&
+                    kotlin.math.abs(credit.timestamp - debit.timestamp) <= 15 * 60 * 1000L
+                }
+                if (matchingCredit != null) {
+                    if (debit.category != "Transfer") toUpdateToTransfer.add(debit.copy(category = "Transfer"))
+                    if (matchingCredit.category != "Transfer") toUpdateToTransfer.add(matchingCredit.copy(category = "Transfer"))
+                }
+            }
+
+            for (tx in toUpdateToTransfer) {
+                transactionDao.updateTransactionCategory(tx.id, "Transfer")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("TransactionRepository", "Error reconciling self transfers", e)
         }
     }
 }

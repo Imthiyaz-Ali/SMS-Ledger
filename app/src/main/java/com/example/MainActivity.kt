@@ -260,22 +260,29 @@ fun SMSLedgerApp(
         }
     }
 
-    // Aggregate dynamic totals for present month (June 2026 based on metadata)
-    val currentMonthKey = remember {
-        SimpleDateFormat("MM-yyyy", Locale.US).format(Date())
+    // Aggregate dynamic totals for present month using timestamp boundaries
+    val (startOfMonthMs, endOfMonthMs) = remember {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        val start = cal.timeInMillis
+        cal.add(Calendar.MONTH, 1)
+        val end = cal.timeInMillis
+        Pair(start, end)
     }
 
-    val currentMonthExpenses = remember(transactions) {
+    val currentMonthExpenses = remember(transactions, startOfMonthMs, endOfMonthMs) {
         transactions.filter { tx ->
-            val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-            format == currentMonthKey && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Remainder" && tx.type != "Not a Transaction" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
+            tx.timestamp in startOfMonthMs until endOfMonthMs && tx.type != "Credit" && tx.type != "Reminder" && tx.type != "Remainder" && tx.type != "Not a Transaction" && tx.type != "Credit Card Payment" && !tx.category.equals("Transfer", ignoreCase = true)
         }.sumOf { it.amount }
     }
 
-    val currentMonthIncome = remember(transactions) {
+    val currentMonthIncome = remember(transactions, startOfMonthMs, endOfMonthMs) {
         transactions.filter { tx ->
-            val format = SimpleDateFormat("MM-yyyy", Locale.US).format(Date(tx.timestamp))
-            format == currentMonthKey && tx.type == "Credit" && !tx.category.equals("Transfer", ignoreCase = true)
+            tx.timestamp in startOfMonthMs until endOfMonthMs && tx.type == "Credit" && !tx.category.equals("Transfer", ignoreCase = true)
         }.sumOf { it.amount }
     }
 
@@ -1156,7 +1163,7 @@ fun DashboardMainScreen(
                     }
                 }
             } else if (searchResults.isNotEmpty()) {
-                items(searchResults) { tx ->
+                items(searchResults, key = { it.id }) { tx ->
                     TransactionListItemRow(
                         tx = tx,
                         onClick = { onTransactionClick(tx) },
@@ -1590,14 +1597,14 @@ fun DashboardMainScreen(
             }
         } else {
             val previewAccounts = accountBalances.take(2)
-            items(previewAccounts) { accBalance ->
+            items(previewAccounts, key = { it.accountIdentifier }) { accBalance ->
                 val cleanAccName = formatAccountDisplayName(accBalance.accountIdentifier)
                 val isApproved = approvedAccounts.contains(accBalance.accountIdentifier)
                 val balAmount = accBalance.remainingBalance
 
                 AccountFeaturedCard(
                     headerTitle = if (accBalance.accountIdentifier.contains("Bank", ignoreCase = true)) "Bank Account" else "Account Balance",
-                    headerRightText = if (isApproved) "Tracked" else "Track?",
+                    headerRightText = null,
                     title = cleanAccName,
                     amountText = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
                     amountSubtitle = null,
@@ -1662,7 +1669,7 @@ fun DashboardMainScreen(
             }
         } else {
             val previewReminders = activeRemindersCurrent.take(2)
-            items(previewReminders) { due ->
+            items(previewReminders, key = { it.id }) { due ->
                 val dueLabel = formatYesBankBeneficiary(due.beneficiary)
                 val daysRemaining = calculateDaysRemainingText(due.rawSms)
                 val dueDateHeader = formatDueDateHeader(due.rawSms)
@@ -1716,7 +1723,7 @@ fun DashboardMainScreen(
             }
 
             if (showCompletedReminders) {
-                items(completedRemindersCurrent) { due ->
+                items(completedRemindersCurrent, key = { it.id }) { due ->
                     val dueLabel = formatYesBankBeneficiary(due.beneficiary)
                     val customLabel = if (due.type == "Reminder") {
                         val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(due.rawSms)
@@ -1856,7 +1863,7 @@ fun DashboardMainScreen(
         }
 
         if (topFive.isNotEmpty()) {
-            items(topFive) { tx ->
+            items(topFive, key = { it.id }) { tx ->
                 TransactionListItemRow(
                     tx = tx,
                     onClick = { onTransactionClick(tx) },
@@ -1948,14 +1955,14 @@ fun DashboardMainScreen(
                             )
                         }
                     } else {
-                        items(accountBalances) { accBalance ->
+                        items(accountBalances, key = { it.accountIdentifier }) { accBalance ->
                             val cleanAccName = formatAccountDisplayName(accBalance.accountIdentifier)
                             val isApproved = approvedAccounts.contains(accBalance.accountIdentifier)
                             val balAmount = accBalance.remainingBalance
 
                             AccountFeaturedCard(
                                 headerTitle = if (isApproved) "Active Account" else "New Account",
-                                headerRightText = if (isApproved) "Tracked" else "Track?",
+                                headerRightText = null,
                                 title = cleanAccName,
                                 amountText = String.format(Locale.getDefault(), "₹%,.2f", balAmount),
                                 amountSubtitle = null,
@@ -2032,7 +2039,7 @@ fun DashboardMainScreen(
                             )
                         }
                     } else {
-                        items(activeRemindersCurrent) { due ->
+                        items(activeRemindersCurrent, key = { it.id }) { due ->
                             val dueLabel = formatYesBankBeneficiary(due.beneficiary)
                             val daysRemaining = calculateDaysRemainingText(due.rawSms)
                             val dueDateHeader = formatDueDateHeader(due.rawSms)
@@ -2068,7 +2075,7 @@ fun DashboardMainScreen(
                             )
                         }
 
-                        items(completedRemindersCurrent) { due ->
+                        items(completedRemindersCurrent, key = { it.id }) { due ->
                             val dueLabel = formatYesBankBeneficiary(due.beneficiary)
                             val dueDateHeader = formatDueDateHeader(due.rawSms)
 
@@ -2487,7 +2494,7 @@ fun AnalysisDetailedScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(bottom = 16.dp)
                         ) {
-                            items(nonReminderTransactions) { tx ->
+                            items(nonReminderTransactions, key = { it.id }) { tx ->
                                 TransactionListItemRow(
                                     tx = tx,
                                     onClick = { onTransactionClick(tx) },
@@ -2646,7 +2653,7 @@ fun AnalysisDetailedScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxHeight(0.6f)
                     ) {
-                        items(catTransactions) { tx ->
+                        items(catTransactions, key = { it.id }) { tx ->
                             TransactionListItemRow(
                                 tx = tx,
                                 onClick = { 
@@ -3587,6 +3594,8 @@ fun AdvancedTrendsScreen(
 // ==========================================
 
 // Custom Row list item row
+private val transactionListItemDateFormat = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+
 @Composable
 fun TransactionListItemRow(
     tx: TransactionSMS,
@@ -3597,22 +3606,22 @@ fun TransactionListItemRow(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
+            .padding(vertical = 3.dp),
         shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable { onClick() }
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f)
             ) {
                 // Circle supporting category-specific icon tinted dynamically
@@ -3621,10 +3630,9 @@ fun TransactionListItemRow(
                 }
                 Box(
                     modifier = Modifier
-                        .size(32.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
-                        .background(color.copy(alpha = 0.15f), CircleShape)
-                        .border(1.dp, color.copy(alpha = 0.3f), CircleShape)
+                        .background(color.copy(alpha = 0.12f), CircleShape)
                         .then(
                             if (onIconClick != null) {
                                 Modifier.clickable { onIconClick() }
@@ -3640,7 +3648,7 @@ fun TransactionListItemRow(
                                 imageVector = icon.imageVector,
                                 contentDescription = tx.category,
                                 tint = color,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                         is CategoryIcon.Character -> {
@@ -3652,7 +3660,7 @@ fun TransactionListItemRow(
                             )
                         }
                         is CategoryIcon.OthersSpecial -> {
-                            OthersIcon(size = 16.dp)
+                            OthersIcon(size = 18.dp)
                         }
                     }
                 }
@@ -3662,7 +3670,7 @@ fun TransactionListItemRow(
                         text = formatYesBankBeneficiary(tx.beneficiary),
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp
+                            fontSize = 14.sp
                         ),
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
@@ -3670,11 +3678,13 @@ fun TransactionListItemRow(
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     val dateFormatted = remember(tx.timestamp) {
-                        SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(tx.timestamp))
+                        synchronized(transactionListItemDateFormat) {
+                            transactionListItemDateFormat.format(Date(tx.timestamp))
+                        }
                     }
                     Text(
                         text = dateFormatted,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -3682,8 +3692,14 @@ fun TransactionListItemRow(
 
             val isTransfer = tx.category.equals("Transfer", ignoreCase = true)
             val isCredit = tx.type == "Credit"
-            val labelPrefix = if (isTransfer) "⇄ " else if (isCredit) "+" else "-"
-            val textColorVal = if (isTransfer) MaterialTheme.colorScheme.secondary else if (isCredit) MaterialTheme.colorScheme.primary else Color(0xFFEF5350)
+            val labelPrefix = if (isTransfer) "⇄ " else if (isCredit) "+ " else "- "
+            val textColorVal = if (isTransfer) {
+                MaterialTheme.colorScheme.secondary
+            } else if (isCredit) {
+                Color(0xFF2E7D32) // Fresh Green for credit
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
 
             Text(
                 text = String.format(Locale.getDefault(), "%s₹%,.0f", labelPrefix, tx.amount),

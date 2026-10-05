@@ -57,6 +57,17 @@ object TransactionParser {
     private val YES_DATE_REGEX = Regex("(?i)\\b\\d{2}[-/]\\d{2}[-/]\\d{4}.*")
     private val YES_TIME_REGEX = Regex("(?i)\\b\\d{2}:\\d{2}(?::\\d{2})?.*")
 
+    private val EXPLICIT_PATTERNS = listOf(
+        Pattern.compile("(?i)(?:a/c|acc|account|card|a_c|acct|vpa|no\\.?|ending\\s*(?:in|with)?|credited\\s+to|debited\\s+from)\\s*[:\\-]?\\s*(?:[x*#.]+\\s*)?(\\d{3,6})\\b"),
+        Pattern.compile("(?i)\\b(?:X{2,}|\\*{2,}|\\.{2,}|no\\.?\\s*X+|card\\s+x+)(\\d{3,4})\\b"),
+        Pattern.compile("(?i)\\b(?:card|acc|a/c)\\s+(?:ending\\s+)?(\\d{3,4})\\b")
+    )
+    private val LEADING_PUNCT_REGEX = Regex("^[\"'\\-:;,.\\s]+")
+    private val LEADING_DATE_REGEX = Regex("(?i)^\\d{1,2}[-/][a-zA-Z0-9]{2,4}[-/]\\d{2,4}\\s*")
+    private val LEADING_PREFIX_REGEX = Regex("(?i)^(?:spent\\s+at|spent\\s+on|paid\\s+to|at\\s+merchant|on\\s+merchant|info[:\\-]?|on|at|to|for|in|from|by|towards|via|using|through|vpa|upi|ref|merchant)\\s+")
+    private val BENEFICIARY_SUFFIXES = listOf("via", "using", "on", "at", "for", "to", "in", "avl", "available", "bal", "balance", "lmt", "limit", "effective", "has")
+    private val NOISE_SET = setOf("on", "at", "to", "for", "in", "from", "by", "towards", "via", "using", "through", "info", "merchant", "unknown", "ref")
+
     private val PROMOTIONAL_FILTER_PATTERN = Pattern.compile(
         "(?i)\\b(shipment|courier|awb|tracking|bluedart|delhivery|dtdc|fedex|ekart|dhl|parcel|package|dispatched|out\\s+for\\s+delivery|delivered|order\\s+placed|otp|verification\\s+code|security\\s+code|login\\s+code|one\\s+time\\s+password|disbursal|disburse|confirm\\s+(?:your\\s+)?tenure|apply\\s+for\\s+loan|loan\\s+offer|(?:will|to|would|shall)\\s+be\\s+(?:credited|debited)|will\\s+(?:credited|debited)|declined|decline|failed|unsuccessful|rejected|pre-?approved\\s+loan|dnd|complaint|complaints|trai|telemarketer|telemarketers|service\\s+request|ticket\\s+no|ticket\\s+number|case\\s+no|customer\\s+care|feedback|resolution|regulations|helpdesk|query)\\b"
     )
@@ -158,13 +169,7 @@ object TransactionParser {
         }
 
         // Explicit account/card patterns with trailing 3-6 digits
-        val explicitPatterns = listOf(
-            Pattern.compile("(?i)(?:a/c|acc|account|card|a_c|acct|vpa|no\\.?|ending\\s*(?:in|with)?|credited\\s+to|debited\\s+from)\\s*[:\\-]?\\s*(?:[x*#.]+\\s*)?(\\d{3,6})\\b"),
-            Pattern.compile("(?i)\\b(?:X{2,}|\\*{2,}|\\.{2,}|no\\.?\\s*X+|card\\s+x+)(\\d{3,4})\\b"),
-            Pattern.compile("(?i)\\b(?:card|acc|a/c)\\s+(?:ending\\s+)?(\\d{3,4})\\b")
-        )
-
-        for (pattern in explicitPatterns) {
+        for (pattern in EXPLICIT_PATTERNS) {
             val matcher = pattern.matcher(body)
             while (matcher.find()) {
                 val tail = matcher.group(1) ?: ""
@@ -588,14 +593,8 @@ object TransactionParser {
             val indexAt = clean.indexOf('@')
             if (indexAt != -1) {
                 var afterAt = clean.substring(indexAt + 1).trim()
-                
-                // Remove date (e.g. 09-06-2026)
-                val dateRegex = Regex("(?i)\\b\\d{2}[-/]\\d{2}[-/]\\d{4}.*")
-                afterAt = afterAt.replace(dateRegex, "").trim()
-                
-                // Remove time (e.g. 05:52:50)
-                val timeRegex = Regex("(?i)\\b\\d{2}:\\d{2}(?::\\d{2})?.*")
-                afterAt = afterAt.replace(timeRegex, "").trim()
+                afterAt = afterAt.replace(YES_DATE_REGEX, "").trim()
+                afterAt = afterAt.replace(YES_TIME_REGEX, "").trim()
                 
                 if (afterAt.isNotBlank()) {
                     clean = afterAt
@@ -604,18 +603,16 @@ object TransactionParser {
         }
 
         // Remove leading quotes, colons, dashes, slashes, or non-alphanumeric punctuation
-        clean = clean.replace(Regex("^[\"'\\-:;,.\\s]+"), "").trim()
+        clean = clean.replace(LEADING_PUNCT_REGEX, "").trim()
 
         // Remove leading dates if candidate accidentally included date prefix (e.g. "22-Aug-26 on RELIANCE RETAIL")
-        clean = clean.replace(Regex("(?i)^\\d{1,2}[-/][a-zA-Z0-9]{2,4}[-/]\\d{2,4}\\s*"), "").trim()
+        clean = clean.replace(LEADING_DATE_REGEX, "").trim()
 
         // Strip leading preposition/adjective words before merchant name
-        val leadingPrefixRegex = Regex("(?i)^(?:spent\\s+at|spent\\s+on|paid\\s+to|at\\s+merchant|on\\s+merchant|info[:\\-]?|on|at|to|for|in|from|by|towards|via|using|through|vpa|upi|ref|merchant)\\s+")
-        
         var prevLen = -1
         while (clean.length != prevLen) {
             prevLen = clean.length
-            clean = clean.replace(leadingPrefixRegex, "").trim()
+            clean = clean.replace(LEADING_PREFIX_REGEX, "").trim()
         }
 
         // Remove trailing commas, periods or spaces
@@ -624,9 +621,8 @@ object TransactionParser {
         }
 
         // Remove trailing helper words
-        val suffixes = listOf("via", "using", "on", "at", "for", "to", "in", "avl", "available", "bal", "balance", "lmt", "limit", "effective", "has")
-        suffixes.forEach { suffix ->
-            if (clean.lowercase().endsWith(" $suffix")) {
+        BENEFICIARY_SUFFIXES.forEach { suffix ->
+            if (clean.endsWith(" $suffix", ignoreCase = true)) {
                 clean = clean.substring(0, clean.length - (suffix.length + 1)).trim()
             }
         }
@@ -635,11 +631,10 @@ object TransactionParser {
         prevLen = -1
         while (clean.length != prevLen) {
             prevLen = clean.length
-            clean = clean.replace(leadingPrefixRegex, "").trim()
+            clean = clean.replace(LEADING_PREFIX_REGEX, "").trim()
         }
 
-        val noiseSet = setOf("on", "at", "to", "for", "in", "from", "by", "towards", "via", "using", "through", "info", "merchant", "unknown", "ref")
-        if (clean.isBlank() || clean.lowercase() in noiseSet) {
+        if (clean.isBlank() || clean.lowercase() in NOISE_SET) {
             return "Unknown Beneficiary"
         }
 
@@ -766,10 +761,35 @@ object TransactionParser {
             lowerSms.contains("flipkart") -> "Shopping"
 
             // "Transfer" mapping
+            lowerBeneficiary.contains("self") ||
+            lowerBeneficiary.contains("own account") ||
+            lowerBeneficiary.contains("own a/c") ||
+            lowerBeneficiary.contains("internal transfer") ||
+            lowerBeneficiary.contains("account transfer") ||
+            lowerBeneficiary.contains("a/c transfer") ||
+            lowerBeneficiary.contains("fund transfer") ||
             lowerBeneficiary.contains("transfer to") ||
-            lowerSms.contains("transfer to") ||
-            lowerSms.contains("sent to") ||
-            lowerSms.contains("paid via upi") -> "Other"
+            lowerBeneficiary.contains("trf to") ||
+            lowerSms.contains("self transfer") ||
+            lowerSms.contains("transfer to own") ||
+            lowerSms.contains("transfer to self") ||
+            lowerSms.contains("own account") ||
+            lowerSms.contains("own a/c") ||
+            lowerSms.contains("trf to own") ||
+            lowerSms.contains("trf to self") ||
+            lowerSms.contains("self trf") ||
+            lowerSms.contains("internal transfer") ||
+            lowerSms.contains("linked account") ||
+            lowerSms.contains("linked acct") ||
+            lowerSms.contains("fund transfer") ||
+            lowerSms.contains("a/c transfer") ||
+            lowerSms.contains("account transfer") ||
+            lowerSms.contains("transfer to a/c") ||
+            lowerSms.contains("transfer to account") ||
+            lowerSms.contains("transferred to a/c") ||
+            lowerSms.contains("transferred to account") ||
+            lowerSms.contains("trf to a/c") ||
+            isBankToBankBeneficiary(lowerBeneficiary, lowerSms) -> "Transfer"
 
             // "Travel" mapping
             lowerBeneficiary.contains("uber") ||
@@ -802,5 +822,19 @@ object TransactionParser {
 
             else -> "Other"
         }
+    }
+
+    private fun isBankToBankBeneficiary(lowerBeneficiary: String, lowerSms: String): Boolean {
+        val bankKeywords = listOf("hdfc", "icici", "sbi", "axis", "yes", "kotak", "pnb", "bob", "hsbc", "citi", "paytm", "union", "boi", "canara", "idfc", "indusind", "rbl", "federal", "iob", "uco", "scb")
+        val accKeywords = listOf("a/c", "acc", "account", "card", "x", "xx")
+
+        val containsBank = bankKeywords.any { lowerBeneficiary.contains(it) }
+        val containsAcc = accKeywords.any { lowerBeneficiary.contains(it) }
+        if (containsBank && containsAcc) return true
+
+        if (lowerSms.contains("transfer") || lowerSms.contains("trf") || lowerSms.contains("sent") || lowerSms.contains("paid")) {
+            if (containsBank && (lowerSms.contains("a/c") || lowerSms.contains("acc") || lowerSms.contains("account"))) return true
+        }
+        return false
     }
 }
