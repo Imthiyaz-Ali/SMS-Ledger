@@ -10,12 +10,31 @@ plugins {
 
 val debugKeystoreFile = file("${rootDir}/debug.keystore")
 val debugKeystoreBase64File = file("${rootDir}/debug.keystore.base64")
-if (!debugKeystoreFile.exists() && debugKeystoreBase64File.exists()) {
-  try {
-    val decodedBytes = Base64.getDecoder().decode(debugKeystoreBase64File.readText().trim())
-    debugKeystoreFile.writeBytes(decodedBytes)
-  } catch (e: Exception) {
-    logger.warn("Failed to decode debug.keystore.base64", e)
+if (!debugKeystoreFile.exists()) {
+  if (debugKeystoreBase64File.exists()) {
+    try {
+      val decodedBytes = Base64.getDecoder().decode(debugKeystoreBase64File.readText().trim())
+      debugKeystoreFile.writeBytes(decodedBytes)
+    } catch (e: Exception) {
+      logger.warn("Failed to decode debug.keystore.base64", e)
+    }
+  }
+  if (!debugKeystoreFile.exists()) {
+    try {
+      ProcessBuilder(
+        "keytool", "-genkey", "-v",
+        "-keystore", debugKeystoreFile.absolutePath,
+        "-storepass", "android",
+        "-alias", "androiddebugkey",
+        "-keypass", "android",
+        "-keyalg", "RSA",
+        "-keysize", "2048",
+        "-validity", "10000",
+        "-dname", "CN=Android Debug,O=Android,C=US"
+      ).start().waitFor()
+    } catch (e: Exception) {
+      logger.warn("Failed to auto-generate debug.keystore", e)
+    }
   }
 }
 
@@ -42,10 +61,18 @@ android {
       keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
     }
     create("debugConfig") {
-      storeFile = debugKeystoreFile
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      if (debugKeystoreFile.exists()) {
+        storeFile = debugKeystoreFile
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      } else {
+        val defaultDebug = getByName("debug")
+        storeFile = defaultDebug.storeFile
+        storePassword = defaultDebug.storePassword
+        keyAlias = defaultDebug.keyAlias
+        keyPassword = defaultDebug.keyPassword
+      }
     }
   }
 
