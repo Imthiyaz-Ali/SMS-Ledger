@@ -181,10 +181,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     repository.insertAll(inboxList)
                 }
                 sharedPrefs.edit().putLong("last_sms_scan_timestamp", scanStart).apply()
-                onComplete(inboxList.size)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    onComplete(inboxList.size)
+                }
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Error scanning device inbox", e)
-                onComplete(0)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    onComplete(0)
+                }
             }
         }
     }
