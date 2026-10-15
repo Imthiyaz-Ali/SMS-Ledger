@@ -47,6 +47,12 @@ jobs:
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+          mkdir -p "$HOME/.config/.android" "$HOME/.android"
+          cp debug.keystore "$HOME/.config/.android/debug.keystore"
+          cp debug.keystore "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.config/.android/debug.keystore" "$HOME/.android/debug.keystore"
+          echo "Installed debug keystore to $HOME/.config/.android/debug.keystore and $HOME/.android/debug.keystore"
+
       - name: Create .env file if missing
         run: |
           if [ ! -f .env ]; then
