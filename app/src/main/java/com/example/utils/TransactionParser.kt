@@ -7,17 +7,17 @@ object TransactionParser {
 
     // Common Indian banks
     private val BANK_PATTERN = Pattern.compile(
-        "(?i)\\b(YES|HDFC|ICICI|SBI|AXIS|AMEX|KOTAK|PNB|BOB|HSBC|CITI|PAYTM|UNION|BOI|CANARA|IDFC|INDUSIND|RBL|FEDERAL|IOB|UCO|SCB)\\b"
+        "(?i)\\b(YES|HDFC|ICICI|SBI|AXIS|AMEX|KOTAK|PNB|BOB|HSBC|CITI|PAYTM|UNION|BOI|CANARA|IDFC|INDUSIND|RBL|FEDERAL|IOB|UCO|SCB|INDBNK|INDIAN)\\b"
     )
 
     // Regex for Account / Card details
     private val ACCOUNT_PATTERN = Pattern.compile(
-        "(?i)(?:A/c|Acc|Account|Card|A/C|A_C)[^\\d]*?(\\d{3,6})\\b"
+        "(?i)(?:A/c|A\\\\c|Acc|Account|Card|A/C|A_C)[^\\d]*?(\\d{3,6})\\b"
     )
 
     // Full bank-specific account match (e.g. YES X3349, HDFC *5056)
     private val JOINT_ACCOUNT_PATTERN = Pattern.compile(
-        "(?i)\\b(YES|HDFC|ICICI|SBI|AXIS|AMEX|KOTAK|PNB|BOB|HSBC|CITI|PAYTM|UNION|BOI|CANARA|IDFC|INDUSIND|RBL|FEDERAL|IOB|UCO|SCB)[^\\d]*?(\\d{3,6})\\b"
+        "(?i)\\b(YES|HDFC|ICICI|SBI|AXIS|AMEX|KOTAK|PNB|BOB|HSBC|CITI|PAYTM|UNION|BOI|CANARA|IDFC|INDUSIND|RBL|FEDERAL|IOB|UCO|SCB|INDBNK|INDIAN)[^\\d]*?(\\d{3,6})\\b"
     )
 
     // Regex for Balance (e.g. "Avl Lmt INR...", "Avl Bal Rs...", "Avl Lmt 45,000.00", "Available Balance is Rs...")
@@ -48,9 +48,10 @@ object TransactionParser {
     private val PASSBOOK_BAL_PATTERN = Pattern.compile("(?i)balance\\s+against\\s+[^\\s]+\\s+is\\s+(?:Rs\\.?|INR|₹)?\\s*([0-9,/-]+)")
     private val FLOAT_DIGIT_PATTERN = Pattern.compile("(?<!\\d)([0-9]{1,3}(?:,[0-9]{3})*(?:\\.[0-9]{2})?)(?!\\d)")
     private val ICICI_SPECIAL_PATTERN = Pattern.compile("(?i)on\\s+\\d{2}-[a-zA-Z0-9]{3,4}-\\d{2,4};\\s+(?:on|at|to|for|from)?\\s*([^.]+?)\\s+credited")
-    private val ICICI_STANDARD_PATTERN = Pattern.compile("(?i)on\\s+\\d{2}-[a-zA-Z0-9]{3,4}-\\d{2,4}\\s+(?:on|at|to|for|in|from|towards|via|using)?\\s*([^.]+?)(?=\\s*\\.\\s*(?:Avl|Avb|To|Avail)|$)")
+    private val ICICI_STANDARD_PATTERN = Pattern.compile("(?i)on\\s+\\d{2}-[a-zA-Z0-9]{3,4}-\\d{2,4}\\s*(?:;|:)?\\s*(?:on|at|to|for|in|from|towards|via|using|by)?\\s*([^.]+?)(?=\\s*(?:\\.|;|\\,|\\bUPI:?|\\bRef:?|\\bRRN:?|\\bTxn:?|\\bIMPS|\\bNEFT|\\bRTGS|\\bCall|\\bSMS|\\bAvl|\\bAvb|\\bTo|\\bAvail|\\bBalance)|$)")
     private val ICICI_INFO_PATTERN = Pattern.compile("(?i)Info\\s+(?:[A-Za-z0-9]+[-/:]){1,3}([A-Za-z0-9\\s]+?)(?=\\.|\\s+Available|\\s+Avl|\\s+Bal|$)")
     private val FROM_PATTERN = Pattern.compile("(?i)from\\s+([^\\s]+?)(?=\\s|\\.|$)")
+    private val FROM_BENEFICIARY_PATTERN = Pattern.compile("(?i)(?:credited\\s+with.*\\s+from|credited\\s+from|received\\s+from|transfer\\s+from|transferred\\s+from|\\bfrom|credited\\s+by|received\\s+by|paid\\s+by|by\\s+A/c\\s+linked\\s+to\\s+VPA|by\\s+VPA|\\bby)\\s+([^.]+?)(?=\\s*(?:\\.|;|\\,|\\bUPI:?|\\bRef:?|\\bRRN:?|\\bTxn:?|\\bIMPS|\\bNEFT|\\bRTGS|\\bvia|\\busing|\\bon|\\bfor|\\bavl|\\bbal|\\blmt|\\beffective|\\d{10,})|$)")
     private val CLEAN_PREFIX_REGEX = "(?i)\\b(X|ACC|ACCOUNT|A/C|A_C|BANK|CARD|UNIT)\\b".toRegex()
     private val NON_WORD_REGEX = "[\\d*()#_\\-\\s]+".toRegex()
     private val SENDER_PREFIX_REGEX = "(?i)^[A-Z]{2}-".toRegex()
@@ -58,22 +59,22 @@ object TransactionParser {
     private val YES_TIME_REGEX = Regex("(?i)\\b\\d{2}:\\d{2}(?::\\d{2})?.*")
 
     private val EXPLICIT_PATTERNS = listOf(
-        Pattern.compile("(?i)(?:a/c|acc|account|card|a_c|acct|vpa|no\\.?|ending\\s*(?:in|with)?|credited\\s+to|debited\\s+from)\\s*[:\\-]?\\s*(?:[x*#.]+\\s*)?(\\d{3,6})\\b"),
+        Pattern.compile("(?i)(?:a/c|a\\\\c|acc|account|card|a_c|acct|vpa|no\\.?|ending\\s*(?:in|with)?|credited\\s+to|debited\\s+from)\\s*[:\\-]?\\s*(?:[x*#.]+\\s*)?(\\d{3,6})\\b"),
         Pattern.compile("(?i)\\b(?:X{2,}|\\*{2,}|\\.{2,}|no\\.?\\s*X+|card\\s+x+)(\\d{3,4})\\b"),
-        Pattern.compile("(?i)\\b(?:card|acc|a/c)\\s+(?:ending\\s+)?(\\d{3,4})\\b")
+        Pattern.compile("(?i)\\b(?:card|acc|a/c|a\\\\c)\\s+(?:ending\\s+)?(\\d{3,4})\\b")
     )
     private val LEADING_PUNCT_REGEX = Regex("^[\"'\\-:;,.\\s]+")
     private val LEADING_DATE_REGEX = Regex("(?i)^\\d{1,2}[-/][a-zA-Z0-9]{2,4}[-/]\\d{2,4}\\s*")
     private val LEADING_PREFIX_REGEX = Regex("(?i)^(?:spent\\s+at|spent\\s+on|paid\\s+to|at\\s+merchant|on\\s+merchant|info[:\\-]?|on|at|to|for|in|from|by|towards|via|using|through|vpa|upi|ref|merchant)\\s+")
-    private val BENEFICIARY_SUFFIXES = listOf("via", "using", "on", "at", "for", "to", "in", "avl", "available", "bal", "balance", "lmt", "limit", "effective", "has")
-    private val NOISE_SET = setOf("on", "at", "to", "for", "in", "from", "by", "towards", "via", "using", "through", "info", "merchant", "unknown", "ref")
+    private val BENEFICIARY_SUFFIXES = listOf("via", "using", "on", "at", "for", "to", "in", "avl", "available", "bal", "balance", "lmt", "limit", "effective", "has", "rrn", "ref")
+    private val NOISE_SET = setOf("on", "at", "to", "for", "in", "from", "by", "towards", "via", "using", "through", "info", "merchant", "unknown", "ref", "rrn")
 
     private val PROMOTIONAL_FILTER_PATTERN = Pattern.compile(
         "(?i)\\b(shipment|courier|awb|tracking|bluedart|delhivery|dtdc|fedex|ekart|dhl|parcel|package|dispatched|out\\s+for\\s+delivery|delivered|order\\s+placed|otp|verification\\s+code|security\\s+code|login\\s+code|one\\s+time\\s+password|disbursal|disburse|confirm\\s+(?:your\\s+)?tenure|apply\\s+for\\s+loan|loan\\s+offer|(?:will|to|would|shall)\\s+be\\s+(?:credited|debited)|will\\s+(?:credited|debited)|declined|decline|failed|unsuccessful|rejected|pre-?approved\\s+loan|dnd|complaint|complaints|trai|telemarketer|telemarketers|service\\s+request|ticket\\s+no|ticket\\s+number|case\\s+no|customer\\s+care|feedback|resolution|regulations|helpdesk|query)\\b"
     )
 
     private val TRANSACTION_VERBS_PATTERN = Pattern.compile(
-        "(?i)\\b(debited|credited|spent|transferred|withdrawn|refunded|reversed|charged|cashback)\\b|\\b(?:paid\\s+(?:to|rs|inr|₹)|sent\\s+(?:rs|inr|₹)|transferred\\s+to)\\b"
+        "(?i)\\b(debited|credited|spent|transferred|withdrawn|refunded|reversed|charged|cashback|initiated|paid|sent)\\b"
     )
 
     private val HAS_FINANCIAL_KEYWORD_PATTERN = Pattern.compile(
@@ -102,7 +103,9 @@ object TransactionParser {
         "FEDERAL" to "Federal",
         "IOB" to "IOB",
         "UCO" to "UCO",
-        "SCB" to "SCB"
+        "SCB" to "SCB",
+        "INDBNK" to "Indian Bank",
+        "INDIAN" to "Indian Bank"
     )
 
     fun standardizeAccountIdentifier(identifier: String): String {
@@ -147,7 +150,7 @@ object TransactionParser {
             return "Unknown Account"
         }
 
-        val tail = if (digits.length == 3) "0$digits" else digits.takeLast(4)
+        val tail = if (digits.length == 3) "X$digits" else "X${digits.takeLast(4)}"
         return "$bankName $tail"
     }
 
@@ -210,6 +213,25 @@ object TransactionParser {
             return true
         }
         return false
+    }
+
+    private fun isValidBeneficiary(candidate: String): Boolean {
+        val clean = candidate.trim()
+        val lower = clean.lowercase()
+        if (clean.isBlank() || clean.length < 2) return false
+        if (lower == "unknown beneficiary" || lower == "unknown account" || lower in NOISE_SET) return false
+        if (lower.startsWith("a/c") || lower.startsWith("a\\c") || lower.startsWith("acc") || lower.startsWith("account") || lower.startsWith("card")) return false
+        if (lower.contains(" bank a/c") || lower.contains(" bank acc") || lower.contains(" bank account")) return false
+        if (BANK_PATTERN.matcher(clean).find() && (ACCOUNT_PATTERN.matcher(clean).find() || clean.contains("X", ignoreCase = true) || clean.contains("*"))) return false
+        
+        // Reject pure numbers or currency amounts (e.g. "1,500.00", "inr 1500", "rs 30.00", "30.00", "1500")
+        val strippedAmt = clean.replace("(?i)\\b(inr|rs\\.?|usd|₹)\\b".toRegex(), "").replace(",", "").trim()
+        if (strippedAmt.toDoubleOrNull() != null) return false
+        
+        // Reject dates (e.g. "05-Nov-26", "04-11-26")
+        if (clean.matches("(?i)^\\d{1,2}[-/][a-zA-Z0-9]{2,4}[-/]\\d{2,4}$".toRegex())) return false
+
+        return true
     }
 
     // Beneficiary extraction patterns with greedy parsing up to stop words
@@ -536,23 +558,41 @@ object TransactionParser {
         if (beneficiary == "Unknown Beneficiary") {
             val spentMatcher = SPENT_AT_PATTERN.matcher(body)
             val paidMatcher = PAID_TO_PATTERN.matcher(body)
+            val fromMatcher = FROM_BENEFICIARY_PATTERN.matcher(body)
             
-            if (spentMatcher.find()) {
-                val match = spentMatcher.group(1)
-                if (match != null) beneficiary = match.trim()
-            } else if (paidMatcher.find()) {
-                val match = paidMatcher.group(1)
-                if (match != null) beneficiary = match.trim()
-            } else {
+            val candidates = mutableListOf<String>()
+            
+            while (spentMatcher.find()) {
+                spentMatcher.group(1)?.let { candidates.add(it.trim()) }
+            }
+            while (paidMatcher.find()) {
+                paidMatcher.group(1)?.let { candidates.add(it.trim()) }
+            }
+            while (fromMatcher.find()) {
+                fromMatcher.group(1)?.let { candidates.add(it.trim()) }
+            }
+            
+            for (rawCand in candidates) {
+                val cleaned = cleanBeneficiary(rawCand)
+                if (isValidBeneficiary(cleaned)) {
+                    beneficiary = cleaned
+                    break
+                }
+            }
+
+            if (beneficiary == "Unknown Beneficiary") {
                 // Fallback: look for typical keywords and pull next words
-                listOf("spent at", "spent on", "paid to", "sent to", "towards", "initiated to").forEach { key ->
-                    val index = lowerBody.indexOf(key)
-                    if (index != -1) {
-                        val candidate = body.substring(index + key.length).trim()
-                        val words = candidate.split(" ").take(3).joinToString(" ")
-                        val firstSentence = words.split(".").firstOrNull() ?: words
-                        if (firstSentence.isNotBlank() && firstSentence.length > 2) {
-                            beneficiary = firstSentence.trim()
+                listOf("spent at", "spent on", "paid to", "sent to", "towards", "initiated to", "credited from", "received from", "credited by", "from", "by").forEach { key ->
+                    if (beneficiary == "Unknown Beneficiary") {
+                        val index = lowerBody.indexOf(key)
+                        if (index != -1) {
+                            val candidate = body.substring(index + key.length).trim()
+                            val words = candidate.split(" ").take(3).joinToString(" ")
+                            val firstSentence = words.split(".").firstOrNull() ?: words
+                            val cleaned = cleanBeneficiary(firstSentence.trim())
+                            if (isValidBeneficiary(cleaned)) {
+                                beneficiary = cleaned
+                            }
                         }
                     }
                 }
@@ -749,6 +789,79 @@ object TransactionParser {
             lowerSms.contains("sip transaction") ||
             lowerSms.contains("mutual fund") ||
             lowerSms.contains("investment") -> "Investment"
+
+            // "Dairy" mapping
+            lowerBeneficiary.contains("dairy") ||
+            lowerBeneficiary.contains("amul") ||
+            lowerBeneficiary.contains("mother dairy") ||
+            lowerBeneficiary.contains("nandini") ||
+            lowerBeneficiary.contains("country delight") ||
+            lowerBeneficiary.contains("akshayakalpa") ||
+            lowerBeneficiary.contains("heritage") ||
+            lowerBeneficiary.contains("jersey") ||
+            lowerBeneficiary.contains("dodla") ||
+            lowerBeneficiary.contains("milk") ||
+            lowerBeneficiary.contains("doodh") ||
+            lowerSms.contains("country delight") ||
+            lowerSms.contains("mother dairy") ||
+            lowerSms.contains("dairy") ||
+            lowerSms.contains("milk") -> "Dairy"
+
+            // "Clothing" mapping
+            lowerBeneficiary.contains("zudio") ||
+            lowerBeneficiary.contains("trends") ||
+            lowerBeneficiary.contains("pantaloons") ||
+            lowerBeneficiary.contains("westside") ||
+            lowerBeneficiary.contains("shoppers stop") ||
+            lowerBeneficiary.contains("fabindia") ||
+            lowerBeneficiary.contains("manyavar") ||
+            lowerBeneficiary.contains("raymond") ||
+            lowerBeneficiary.contains("zara") ||
+            lowerBeneficiary.contains("h&m") ||
+            lowerBeneficiary.contains("clothing") ||
+            lowerBeneficiary.contains("apparel") ||
+            lowerBeneficiary.contains("garment") ||
+            lowerBeneficiary.contains("textile") ||
+            lowerBeneficiary.contains("boutique") ||
+            lowerBeneficiary.contains("tailor") ||
+            lowerSms.contains("zudio") ||
+            lowerSms.contains("clothing") ||
+            lowerSms.contains("garments") -> "Clothing"
+
+            // "Education" mapping
+            lowerBeneficiary.contains("school") ||
+            lowerBeneficiary.contains("college") ||
+            lowerBeneficiary.contains("university") ||
+            lowerBeneficiary.contains("tuition") ||
+            lowerBeneficiary.contains("coaching") ||
+            lowerBeneficiary.contains("academy") ||
+            lowerBeneficiary.contains("institute") ||
+            lowerBeneficiary.contains("byju") ||
+            lowerBeneficiary.contains("unacademy") ||
+            lowerBeneficiary.contains("physicswallah") ||
+            lowerBeneficiary.contains("vedantu") ||
+            lowerBeneficiary.contains("aakash") ||
+            lowerBeneficiary.contains("fiitjee") ||
+            lowerBeneficiary.contains("udemy") ||
+            lowerBeneficiary.contains("coursera") ||
+            lowerSms.contains("school fee") ||
+            lowerSms.contains("college fee") ||
+            lowerSms.contains("tuition fee") -> "Education"
+
+            // "Personal Care" mapping
+            lowerBeneficiary.contains("salon") ||
+            lowerBeneficiary.contains("parlour") ||
+            lowerBeneficiary.contains("parlor") ||
+            lowerBeneficiary.contains("barber") ||
+            lowerBeneficiary.contains("nykaa") ||
+            lowerBeneficiary.contains("purplle") ||
+            lowerBeneficiary.contains("mamaearth") ||
+            lowerBeneficiary.contains("beardo") ||
+            lowerBeneficiary.contains("spa") ||
+            lowerBeneficiary.contains("beauty") ||
+            lowerBeneficiary.contains("grooming") ||
+            lowerSms.contains("salon") ||
+            lowerSms.contains("parlour") -> "Personal Care"
 
             // "Shopping" mapping
             lowerBeneficiary.contains("amazon") ||

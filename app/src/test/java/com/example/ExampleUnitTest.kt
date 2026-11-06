@@ -172,6 +172,57 @@ class ExampleUnitTest {
       assertParsedEquals("remainingBalance", 116315.82, it.remainingBalance)
     }
   }
+
+  @Test
+  fun testIciciCreditFromPersonNameFormat() {
+    val sms = "Dear Customer, Acct XX555 is credited with Rs 30.00 on 05-Nov-26 from BASHEER AHAMED. UPI:129575351268-ICICI Bank."
+    val result = TransactionParser.parseSms(sms, 1780850000000L, "AD-ICICIT-S")
+    
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("amount", 30.00, it.amount)
+      assertParsedEquals("type", "Credit", it.type)
+      assertParsedEquals("accountIdentifier", "ICICI X555", it.accountIdentifier)
+      assertParsedEquals("beneficiary", "BASHEER AHAMED", it.beneficiary)
+    }
+  }
+
+  @Test
+  fun testIndianBankCreditFromPersonNameFormat() {
+    val sms = "Your A\\c *7559 is credited with Rs.10000.00 on 04-11-26 by SHAIK IMRAN. RRN 630892389489. Available balance is Rs. 20857.97 - Indian Bank"
+    val result = TransactionParser.parseSms(sms, 1780850000000L, "JD-INDBNK-S")
+    
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("amount", 10000.00, it.amount)
+      assertParsedEquals("type", "Credit", it.type)
+      assertParsedEquals("accountIdentifier", "Indian Bank X7559", it.accountIdentifier)
+      assertParsedEquals("beneficiary", "SHAIK IMRAN", it.beneficiary)
+      assertParsedEquals("remainingBalance", 20857.97, it.remainingBalance)
+    }
+  }
+
+  @Test
+  fun testDairyCategoryMapping() {
+    val sms = "INR 250.00 paid from A/c XX123 to Country Delight on 05-Nov-26."
+    val result = TransactionParser.parseSms(sms, 1780850000000L)
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("beneficiary", "Country Delight", it.beneficiary)
+      assertParsedEquals("category", "Dairy", it.category)
+    }
+  }
+
+  @Test
+  fun testClothingCategoryMapping() {
+    val sms = "Rs. 1899.00 spent on Zudio using HDFC Card X5056 on 05-Nov-26."
+    val result = TransactionParser.parseSms(sms, 1780850000000L)
+    assertNotNull("Result should not be null", result)
+    result?.let {
+      assertParsedEquals("beneficiary", "Zudio", it.beneficiary)
+      assertParsedEquals("category", "Clothing", it.category)
+    }
+  }
 }
 
 

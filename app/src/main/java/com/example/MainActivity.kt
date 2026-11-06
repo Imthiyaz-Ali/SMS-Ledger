@@ -626,7 +626,8 @@ fun SMSLedgerApp(
                     it != "Bills" && it != "EMI" && it != "Entertainment" && it != "Food & Drinks" &&
                     it != "Fuel" && it != "Groceries" && it != "Health" && it != "Investment" &&
                     it != "Other" && it != "Shopping" && it != "Transfer" && it != "Travel" && 
-                    it != "Rent" && it != "Cash Withdrawl" && it != "Cash Withdrawal"
+                    it != "Rent" && it != "Cash Withdrawl" && it != "Cash Withdrawal" &&
+                    it != "Dairy" && it != "Clothing" && it != "Education" && it != "Personal Care"
                 }
             }
             ModalBottomSheet(
@@ -3965,19 +3966,23 @@ fun SheetDetailRow(
 fun getCategoryAsset(category: String): Pair<CategoryIcon, Color> {
     return when (category) {
         "Bills" -> CategoryIcon.Vector(Icons.AutoMirrored.Filled.ReceiptLong) to Color(0xFF4CAF50)          // Green
+        "Cash Withdrawl", "Cash Withdrawal" -> CategoryIcon.Vector(Icons.Default.Atm) to Color(0xFFFF9800) // Amber Orange
+        "Clothing" -> CategoryIcon.Vector(Icons.Default.Checkroom) to Color(0xFFE91E63)        // Pink/Magenta
+        "Dairy" -> CategoryIcon.Vector(Icons.Default.WaterDrop) to Color(0xFF2196F3)           // Soft Blue
+        "Education" -> CategoryIcon.Vector(Icons.Default.School) to Color(0xFF3F51B5)          // Indigo Blue
         "EMI" -> CategoryIcon.Vector(Icons.Default.AccountBalance) to Color(0xFF9E9E9E)        // Grey
-        "Entertainment" -> CategoryIcon.Vector(Icons.Default.Celebration) to Color(0xFF3F51B5)  // Indigo Blue
-        "Food & Drinks" -> CategoryIcon.Vector(Icons.Default.Restaurant) to Color(0xFFE91E63)   // Pink/Magenta
+        "Entertainment" -> CategoryIcon.Vector(Icons.Default.Celebration) to Color(0xFF9C27B0)  // Purple
+        "Food & Drinks" -> CategoryIcon.Vector(Icons.Default.Restaurant) to Color(0xFFFF5722)   // Deep Orange
         "Fuel" -> CategoryIcon.Vector(Icons.Default.LocalGasStation) to Color(0xFFFF9800)       // Amber Orange
         "Groceries" -> CategoryIcon.Vector(Icons.Default.LocalGroceryStore) to Color(0xFF8BC34A)  // Light Green
         "Health" -> CategoryIcon.Vector(Icons.Default.MedicalServices) to Color(0xFFFFB300)     // Yellow/Gold
-        "Investment" -> CategoryIcon.Vector(Icons.AutoMirrored.Filled.TrendingUp) to Color(0xFF607D8B) // Blue Grey/Slate (Modern financial trend up icon)
-        "Other", "Others" -> CategoryIcon.OthersSpecial to Color(0xFFE53935)                  // Red exclamation with black background
-        "Shopping" -> CategoryIcon.Vector(Icons.Default.ShoppingBag) to Color(0xFF00ACC1)       // Teal
-        "Transfer" -> CategoryIcon.Vector(Icons.Default.SwapHoriz) to Color(0xFF9C27B0)         // Purple
-        "Travel" -> CategoryIcon.Vector(Icons.Default.Flight) to Color(0xFF673AB7)              // Violet
+        "Investment" -> CategoryIcon.Vector(Icons.AutoMirrored.Filled.TrendingUp) to Color(0xFF607D8B) // Blue Grey/Slate
+        "Other", "Others" -> CategoryIcon.OthersSpecial to Color(0xFFE53935)                  // Red
+        "Personal Care" -> CategoryIcon.Vector(Icons.Default.Face) to Color(0xFFEC407A)        // Rose Pink
         "Rent" -> CategoryIcon.Vector(Icons.Default.HomeWork) to Color(0xFF4CAF50)              // Green
-        "Cash Withdrawl", "Cash Withdrawal" -> CategoryIcon.Vector(Icons.Default.Atm) to Color(0xFFFF9800) // Money/Cash Icon (Amber Orange)
+        "Shopping" -> CategoryIcon.Vector(Icons.Default.ShoppingBag) to Color(0xFF00ACC1)       // Teal
+        "Transfer" -> CategoryIcon.Vector(Icons.Default.SwapHoriz) to Color(0xFF7E57C2)         // Deep Purple
+        "Travel" -> CategoryIcon.Vector(Icons.Default.Flight) to Color(0xFF00BCD4)              // Cyan
         else -> {
             val trimmed = category.trim()
             val firstChar = if (trimmed.isNotEmpty()) {
@@ -4196,9 +4201,10 @@ fun CategoriesSelectionSheet(
     existingCustomCategories: List<String> = emptyList()
 ) {
     val baseCategories = listOf(
-        "Bills", "EMI", "Entertainment", "Food & Drinks", "Fuel", 
-        "Groceries", "Health", "Investment", "Other", "Shopping", 
-        "Transfer", "Travel", "Rent", "Cash Withdrawl"
+        "Bills", "Cash Withdrawl", "Clothing", "Dairy", "Education",
+        "EMI", "Entertainment", "Food & Drinks", "Fuel", "Groceries",
+        "Health", "Investment", "Other", "Personal Care", "Rent",
+        "Shopping", "Transfer", "Travel"
     )
     
     val allCategories = remember(existingCustomCategories) {
