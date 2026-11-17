@@ -223,6 +223,32 @@ class ExampleUnitTest {
       assertParsedEquals("category", "Clothing", it.category)
     }
   }
+
+  @Test
+  fun testReminderDisplayInfoExtractsBankNameAndDueDate() {
+    val yesSms = "Payment of Credit Card X3349 is due on 02/07/26. Min due Rs.200.00. Total Due Rs.15361.00. Ignore if paid-YES BANK"
+    val yesTx = TransactionParser.parseSms(yesSms, 1780850000000L)!!
+    val yesInfo = buildReminderDisplayInfo(yesTx)
+    assertParsedEquals("bankOrBillerName", "YES Bank", yesInfo.bankOrBillerName)
+    assertParsedEquals("accountDetail", "Credit Card ••3349", yesInfo.accountDetail)
+    assertParsedEquals("dueDateText", "Due 02 Jul 26", yesInfo.dueDateText)
+    assertParsedEquals("minDueText", "Min ₹200", yesInfo.minDueText)
+    assertNotEquals("Reminder", yesInfo.statusBadge)
+
+    val relativeSms = "Your bill of Rs 8367.00 on ICICI card X6008 is due in 2 days. Kindly pay."
+    val iciciTx = TransactionParser.parseSms(relativeSms, 1780850000000L)!!
+    val iciciInfo = buildReminderDisplayInfo(iciciTx)
+    assertParsedEquals("bankOrBillerName", "ICICI Bank", iciciInfo.bankOrBillerName)
+    assertParsedEquals("accountDetail", "Credit Card ••6008", iciciInfo.accountDetail)
+    assertFalse(iciciInfo.dueDateText.contains("Due Soon"))
+
+    val jioSms = "Dear Customer, Bill dated 26-Jun-26 for your JioHome connection is due for payment today. Total amount payable is Rs. 707.00."
+    val jioTx = TransactionParser.parseSms(jioSms, 1780850000000L, "AD-JIOHOM")!!
+    val jioInfo = buildReminderDisplayInfo(jioTx)
+    assertParsedEquals("bankOrBillerName", "JioHome", jioInfo.bankOrBillerName)
+    assertParsedEquals("accountDetail", "Broadband Bill", jioInfo.accountDetail)
+    assertFalse(jioInfo.dueDateText.contains("Due Soon"))
+  }
 }
 
 

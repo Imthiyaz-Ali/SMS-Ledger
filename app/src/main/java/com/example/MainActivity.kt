@@ -839,7 +839,7 @@ fun DashboardMainScreen(
             val sorted = txList.sortedByDescending { it.timestamp }
             val latest = sorted.first()
             
-            val dueCal = parseDueDate(latest.rawSms) ?: Calendar.getInstance().apply { timeInMillis = latest.timestamp }
+            val dueCal = parseDueDate(latest.rawSms, latest.timestamp) ?: Calendar.getInstance().apply { timeInMillis = latest.timestamp }
             val isCurrentOrUpcoming = (dueCal.get(Calendar.YEAR) == currentYear && dueCal.get(Calendar.MONTH) == currentMonth) || 
                                       (dueCal.get(Calendar.YEAR) == upcomingYear && dueCal.get(Calendar.MONTH) == upcomingMonth)
             val isGreaterEqualToday = !dueCal.before(todayCal)
@@ -886,7 +886,7 @@ fun DashboardMainScreen(
 
     val pastRemindersGrouped = remember(pastReminders) {
         pastReminders.groupBy { due ->
-            val dueCal = parseDueDate(due.rawSms) ?: Calendar.getInstance().apply { timeInMillis = due.timestamp }
+            val dueCal = parseDueDate(due.rawSms, due.timestamp) ?: Calendar.getInstance().apply { timeInMillis = due.timestamp }
             val sdf = SimpleDateFormat("MMMM yy", Locale.US)
             sdf.format(dueCal.time)
         }.toList().sortedByDescending { (monthYearStr, _) ->
@@ -1607,6 +1607,9 @@ fun DashboardMainScreen(
 
         // SECTION 1.2: Only Reminders
         item {
+            val activeTotalDue = remember(activeRemindersCurrent) {
+                activeRemindersCurrent.sumOf { it.amount }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1614,18 +1617,48 @@ fun DashboardMainScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Reminders",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = "Upcoming Bills",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (activeRemindersCurrent.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                        ) {
+                            Text(
+                                text = String.format(
+                                    Locale.getDefault(),
+                                    "%d due • ₹%,.0f",
+                                    activeRemindersCurrent.size,
+                                    activeTotalDue
+                                ),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
                 Text(
                     text = "VIEW ALL",
                     style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.clickable { showAllRemindersSheet = true }
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { showAllRemindersSheet = true }
+                        .padding(horizontal = 6.dp, vertical = 6.dp)
                 )
             }
         }
@@ -1635,20 +1668,27 @@ fun DashboardMainScreen(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(85.dp),
+                        .height(80.dp),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
                 ) {
-                    Column(
+                    Row(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.Center,
-                        horizontalAlignment = Alignment.CenterHorizontally
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
                     ) {
+                        Icon(
+                            imageVector = Icons.Outlined.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "No active reminders found for current/upcoming month.",
+                            text = "All caught up! No bills due right now.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1658,21 +1698,14 @@ fun DashboardMainScreen(
         } else {
             val previewReminders = activeRemindersCurrent.take(2)
             items(previewReminders, key = { it.id }) { due ->
-                val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                val daysRemaining = calculateDaysRemainingText(due.rawSms)
-                val dueDateHeader = formatDueDateHeader(due.rawSms)
-
-                AccountFeaturedCard(
-                    headerTitle = dueDateHeader,
-                    headerRightText = daysRemaining,
-                    title = dueLabel,
+                val info = remember(due) { buildReminderDisplayInfo(due, isPastSection = false) }
+                BillReminderCard(
+                    info = info,
                     amountText = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
-                    amountSubtitle = null,
-                    isApprovedOrCompleted = due.isCompleted,
-                    badgeIcon = Icons.Default.CreditCard,
+                    isCompleted = due.isCompleted,
                     onActionClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) },
                     onClick = { onTransactionClick(due) },
-                    modifier = Modifier.padding(vertical = 4.dp)
+                    modifier = Modifier.padding(vertical = 3.dp)
                 )
             }
         }
@@ -1957,6 +1990,9 @@ fun DashboardMainScreen(
     }
 
     if (showAllRemindersSheet) {
+        val activeTotalDue = remember(activeRemindersCurrent) {
+            activeRemindersCurrent.sumOf { it.amount }
+        }
         ModalBottomSheet(
             onDismissRequest = { showAllRemindersSheet = false },
             containerColor = MaterialTheme.colorScheme.surface,
@@ -1966,7 +2002,7 @@ fun DashboardMainScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
                     .navigationBarsPadding()
             ) {
                 Row(
@@ -1975,7 +2011,7 @@ fun DashboardMainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "All Reminders",
+                        text = "Bill Reminders",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -1989,7 +2025,43 @@ fun DashboardMainScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                if (activeRemindersCurrent.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Upcoming Total",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                )
+                                Text(
+                                    text = "${activeRemindersCurrent.size} unpaid ${if (activeRemindersCurrent.size == 1) "bill" else "bills"}",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            Text(
+                                text = String.format(Locale.getDefault(), "₹%,.0f", activeTotalDue),
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Black),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
 
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -1997,20 +2069,20 @@ fun DashboardMainScreen(
                 ) {
                     item {
                         Text(
-                            text = "Active Reminders (${activeRemindersCurrent.size})",
+                            text = "Upcoming (${activeRemindersCurrent.size})",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp
                             ),
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(vertical = 4.dp)
+                            modifier = Modifier.padding(vertical = 2.dp)
                         )
                     }
 
                     if (activeRemindersCurrent.isEmpty()) {
                         item {
                             Text(
-                                text = "No active reminders found for current/upcoming month.",
+                                text = "No unpaid bills found for current or upcoming month.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 8.dp)
@@ -2018,18 +2090,11 @@ fun DashboardMainScreen(
                         }
                     } else {
                         items(activeRemindersCurrent, key = { it.id }) { due ->
-                            val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                            val daysRemaining = calculateDaysRemainingText(due.rawSms)
-                            val dueDateHeader = formatDueDateHeader(due.rawSms)
-
-                            AccountFeaturedCard(
-                                headerTitle = dueDateHeader,
-                                headerRightText = daysRemaining,
-                                title = dueLabel,
+                            val info = remember(due) { buildReminderDisplayInfo(due, isPastSection = false) }
+                            BillReminderCard(
+                                info = info,
                                 amountText = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
-                                amountSubtitle = null,
-                                isApprovedOrCompleted = due.isCompleted,
-                                badgeIcon = Icons.Default.CreditCard,
+                                isCompleted = due.isCompleted,
                                 onActionClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) },
                                 onClick = {
                                     showAllRemindersSheet = false
@@ -2043,28 +2108,22 @@ fun DashboardMainScreen(
                         item {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Completed Reminders (${completedRemindersCurrent.size})",
+                                text = "Completed (${completedRemindersCurrent.size})",
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 15.sp
                                 ),
                                 color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(vertical = 4.dp)
+                                modifier = Modifier.padding(vertical = 2.dp)
                             )
                         }
 
                         items(completedRemindersCurrent, key = { it.id }) { due ->
-                            val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                            val dueDateHeader = formatDueDateHeader(due.rawSms)
-
-                            AccountFeaturedCard(
-                                headerTitle = dueDateHeader,
-                                headerRightText = "Paid",
-                                title = dueLabel,
+                            val info = remember(due) { buildReminderDisplayInfo(due, isPastSection = false) }
+                            BillReminderCard(
+                                info = info,
                                 amountText = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
-                                amountSubtitle = null,
-                                isApprovedOrCompleted = true,
-                                badgeIcon = Icons.Default.CreditCard,
+                                isCompleted = true,
                                 onActionClick = { onUpdateReminderCompleted(due.id, false) },
                                 onClick = {
                                     showAllRemindersSheet = false
@@ -2076,43 +2135,50 @@ fun DashboardMainScreen(
 
                     if (pastReminders.isNotEmpty()) {
                         item {
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "Past Reminders (${pastReminders.size})",
+                                text = "Past History (${pastReminders.size})",
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 15.sp
                                 ),
                                 color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(vertical = 4.dp)
+                                modifier = Modifier.padding(vertical = 2.dp)
                             )
                         }
 
                         pastRemindersGrouped.forEach { (monthYearStr, dues) ->
                             item {
-                                Text(
-                                    text = monthYearStr,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    ),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp, start = 4.dp)
-                                )
+                                val monthSum = dues.sumOf { it.amount }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 6.dp, bottom = 2.dp, start = 4.dp, end = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = monthYearStr,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = String.format(Locale.getDefault(), "%d • ₹%,.0f", dues.size, monthSum),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
 
-                            items(dues) { due ->
-                                val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                                val dueDateHeader = formatDueDateHeader(due.rawSms)
-
-                                AccountFeaturedCard(
-                                    headerTitle = dueDateHeader,
-                                    headerRightText = "Paid",
-                                    title = dueLabel,
+                            items(dues, key = { it.id }) { due ->
+                                val info = remember(due) { buildReminderDisplayInfo(due, isPastSection = true) }
+                                BillReminderCard(
+                                    info = info,
                                     amountText = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
-                                    amountSubtitle = null,
-                                    isApprovedOrCompleted = due.isCompleted,
-                                    badgeIcon = Icons.Default.CreditCard,
+                                    isCompleted = due.isCompleted,
                                     onActionClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) },
                                     onClick = {
                                         showAllRemindersSheet = false
@@ -2138,7 +2204,7 @@ fun DashboardMainScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
                     .navigationBarsPadding()
             ) {
                 Row(
@@ -2147,7 +2213,7 @@ fun DashboardMainScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Past Reminders",
+                        text = "Past Bill History",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -2161,7 +2227,7 @@ fun DashboardMainScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -2170,7 +2236,7 @@ fun DashboardMainScreen(
                     if (pastRemindersGrouped.isEmpty()) {
                         item {
                             Text(
-                                text = "No past reminders found.",
+                                text = "No past bill reminders found.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 8.dp)
@@ -2179,29 +2245,36 @@ fun DashboardMainScreen(
                     } else {
                         pastRemindersGrouped.forEach { (monthYearStr, dues) ->
                             item {
-                                Text(
-                                    text = monthYearStr,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    ),
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp, start = 4.dp)
-                                )
+                                val monthSum = dues.sumOf { it.amount }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 6.dp, bottom = 2.dp, start = 4.dp, end = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = monthYearStr,
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = String.format(Locale.getDefault(), "%d • ₹%,.0f", dues.size, monthSum),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
 
-                            items(dues) { due ->
-                                val dueLabel = formatYesBankBeneficiary(due.beneficiary)
-                                val dueDateHeader = formatDueDateHeader(due.rawSms)
-
-                                AccountFeaturedCard(
-                                    headerTitle = dueDateHeader,
-                                    headerRightText = "Paid",
-                                    title = dueLabel,
+                            items(dues, key = { it.id }) { due ->
+                                val info = remember(due) { buildReminderDisplayInfo(due, isPastSection = true) }
+                                BillReminderCard(
+                                    info = info,
                                     amountText = String.format(Locale.getDefault(), "₹%,.0f", due.amount),
-                                    amountSubtitle = null,
-                                    isApprovedOrCompleted = due.isCompleted,
-                                    badgeIcon = Icons.Default.CreditCard,
+                                    isCompleted = due.isCompleted,
                                     onActionClick = { onUpdateReminderCompleted(due.id, !due.isCompleted) },
                                     onClick = {
                                         showPastRemindersSheet = false
@@ -4751,160 +4824,518 @@ fun formatDueDateString(rawDate: String): String {
     return rawDate
 }
 
-fun parseDueDate(rawSms: String): Calendar? {
-    val mStr = java.util.regex.Pattern.compile("(?i)due on\\s+([^.\\s]+)").matcher(rawSms)
-    if (!mStr.find()) return null
-    val rawDate = (mStr.group(1)?.removeSuffix(".") ?: "").trim().replace("\\", "/").replace("-", "/")
-    val parts = rawDate.split("/")
-    if (parts.size >= 3) {
-        val day = parts[0].toIntOrNull() ?: return null
-        val monthStr = parts[1]
-        var year = parts[2].toIntOrNull() ?: return null
-        if (year < 100) year += 2000
-        
-        val month = monthStr.toIntOrNull()
-        if (month != null) {
-            if (month in 1..12) {
-                val cal = Calendar.getInstance()
-                cal.clear()
-                cal.set(year, month - 1, day)
-                return cal
+enum class ReminderUrgency {
+    OVERDUE,
+    TODAY,
+    SOON,
+    UPCOMING,
+    PAID
+}
+
+data class ReminderDisplayInfo(
+    val bankOrBillerName: String,
+    val accountDetail: String?,
+    val dueDateText: String,
+    val statusBadge: String?,
+    val minDueText: String?,
+    val urgency: ReminderUrgency,
+    val brandAccentColor: Color,
+    val iconVector: ImageVector
+)
+
+fun parseDueDate(rawSms: String, fallbackTimestamp: Long? = null): Calendar? {
+    val monthsShort = listOf("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+    val monthFullMap = mapOf(
+        "january" to 0, "jan" to 0,
+        "february" to 1, "feb" to 1,
+        "march" to 2, "mar" to 2,
+        "april" to 3, "apr" to 3,
+        "may" to 4,
+        "june" to 5, "jun" to 5,
+        "july" to 6, "jul" to 6,
+        "august" to 7, "aug" to 7,
+        "september" to 8, "sept" to 8, "sep" to 8,
+        "october" to 9, "oct" to 9,
+        "november" to 10, "nov" to 10,
+        "december" to 11, "dec" to 11
+    )
+
+    fun makeCal(yearRaw: Int, monthZeroBased: Int, day: Int): Calendar? {
+        if (monthZeroBased !in 0..11 || day !in 1..31) return null
+        val year = if (yearRaw < 100) yearRaw + 2000 else yearRaw
+        return Calendar.getInstance().apply {
+            clear()
+            set(year, monthZeroBased, day)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+    }
+
+    val numericCuePattern = java.util.regex.Pattern.compile(
+        "(?i)(?:due\\s+on|due\\s+by|due\\s+date\\s*(?:is|:|-)?|on\\s+or\\s+before|on/before|pay\\s+by|latest\\s+by|last\\s+date\\s*(?:is|:|-)?|before|due)\\s+(\\d{1,2})[/\\\\.\\-](\\d{1,2})[/\\\\.\\-](\\d{2,4})"
+    )
+    val numMatcher = numericCuePattern.matcher(rawSms)
+    if (numMatcher.find()) {
+        val day = numMatcher.group(1)?.toIntOrNull()
+        val month = numMatcher.group(2)?.toIntOrNull()
+        val year = numMatcher.group(3)?.toIntOrNull()
+        if (day != null && month != null && year != null) {
+            makeCal(year, month - 1, day)?.let { return it }
+        }
+    }
+
+    val namedYearCuePattern = java.util.regex.Pattern.compile(
+        "(?i)(?:due\\s+on|due\\s+by|due\\s+date\\s*(?:is|:|-)?|on\\s+or\\s+before|on/before|pay\\s+by|latest\\s+by|last\\s+date\\s*(?:is|:|-)?|before|due)\\s+(\\d{1,2})(?:st|nd|rd|th)?[\\s\\-/,]+([A-Za-z]{3,9})[\\s,\\-/,]+(\\d{2,4})"
+    )
+    val namedYearMatcher = namedYearCuePattern.matcher(rawSms)
+    if (namedYearMatcher.find()) {
+        val day = namedYearMatcher.group(1)?.toIntOrNull()
+        val monthStr = namedYearMatcher.group(2)?.lowercase(Locale.US) ?: ""
+        val year = namedYearMatcher.group(3)?.toIntOrNull()
+        val monthIdx = monthFullMap[monthStr] ?: monthsShort.indexOf(monthStr.take(3)).takeIf { it >= 0 }
+        if (day != null && monthIdx != null && year != null) {
+            makeCal(year, monthIdx, day)?.let { return it }
+        }
+    }
+
+    val monthFirstCuePattern = java.util.regex.Pattern.compile(
+        "(?i)(?:due\\s+on|due\\s+by|due\\s+date\\s*(?:is|:|-)?|on\\s+or\\s+before|on/before|pay\\s+by|latest\\s+by|before|due)\\s+([A-Za-z]{3,9})\\s+(\\d{1,2})(?:st|nd|rd|th)?[\\s,]+(\\d{2,4})"
+    )
+    val monthFirstMatcher = monthFirstCuePattern.matcher(rawSms)
+    if (monthFirstMatcher.find()) {
+        val monthStr = monthFirstMatcher.group(1)?.lowercase(Locale.US) ?: ""
+        val day = monthFirstMatcher.group(2)?.toIntOrNull()
+        val year = monthFirstMatcher.group(3)?.toIntOrNull()
+        val monthIdx = monthFullMap[monthStr] ?: monthsShort.indexOf(monthStr.take(3)).takeIf { it >= 0 }
+        if (day != null && monthIdx != null && year != null) {
+            makeCal(year, monthIdx, day)?.let { return it }
+        }
+    }
+
+    val namedNoYearCuePattern = java.util.regex.Pattern.compile(
+        "(?i)(?:due\\s+on|due\\s+by|due\\s+date\\s*(?:is|:|-)?|on\\s+or\\s+before|on/before|pay\\s+by|latest\\s+by|last\\s+date\\s*(?:is|:|-)?|before)\\s+(\\d{1,2})(?:st|nd|rd|th)?[\\s\\-/]+([A-Za-z]{3,9})\\b"
+    )
+    val noYearMatcher = namedNoYearCuePattern.matcher(rawSms)
+    if (noYearMatcher.find()) {
+        val day = noYearMatcher.group(1)?.toIntOrNull()
+        val monthStr = noYearMatcher.group(2)?.lowercase(Locale.US) ?: ""
+        val monthIdx = monthFullMap[monthStr] ?: monthsShort.indexOf(monthStr.take(3)).takeIf { it >= 0 }
+        if (day != null && monthIdx != null) {
+            val baseCal = Calendar.getInstance().apply {
+                if (fallbackTimestamp != null && fallbackTimestamp > 0L) timeInMillis = fallbackTimestamp
             }
-        } else {
-            val months = listOf(
-                "jan", "feb", "mar", "apr", "may", "jun",
-                "jul", "aug", "sep", "oct", "nov", "dec"
-            )
-            val index = months.indexOf(monthStr.lowercase(Locale.US).take(3))
-            if (index != -1) {
-                val cal = Calendar.getInstance()
-                cal.clear()
-                cal.set(year, index, day)
-                return cal
+            var year = baseCal.get(Calendar.YEAR)
+            if (monthIdx < baseCal.get(Calendar.MONTH) - 6) {
+                year += 1
+            }
+            makeCal(year, monthIdx, day)?.let { return it }
+        }
+    }
+
+    if (fallbackTimestamp != null && fallbackTimestamp > 0L) {
+        val lowerSms = rawSms.lowercase(Locale.US)
+        val baseCal = Calendar.getInstance().apply {
+            timeInMillis = fallbackTimestamp
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        if (Regex("(?i)\\bdue\\s+(?:for\\s+payment\\s+)?today\\b|\\bis\\s+due\\s+today\\b").containsMatchIn(lowerSms)) {
+            return baseCal
+        }
+        if (Regex("(?i)\\bdue\\s+(?:for\\s+payment\\s+)?tomorrow\\b|\\bis\\s+due\\s+tomorrow\\b").containsMatchIn(lowerSms)) {
+            baseCal.add(Calendar.DAY_OF_YEAR, 1)
+            return baseCal
+        }
+        val inDaysMatch = Regex("(?i)\\bdue\\s+in\\s+(\\d{1,2})\\s+days?\\b").find(lowerSms)
+        if (inDaysMatch != null) {
+            val days = inDaysMatch.groupValues[1].toIntOrNull()
+            if (days != null) {
+                baseCal.add(Calendar.DAY_OF_YEAR, days)
+                return baseCal
             }
         }
     }
+
     return null
 }
 
-fun formatDueDateHeader(rawSms: String): String {
-    val cal = parseDueDate(rawSms)
-    if (cal != null) {
-        val sdf = java.text.SimpleDateFormat("dd MMM yy", Locale.US)
-        return sdf.format(cal.time)
+fun formatDueDateHeader(rawSms: String, fallbackTimestamp: Long? = null): String {
+    val parsedCal = parseDueDate(rawSms, fallbackTimestamp)
+    val sdf = java.text.SimpleDateFormat("dd MMM yy", Locale.US)
+    return if (parsedCal != null) {
+        "Due ${sdf.format(parsedCal.time)}"
+    } else if (fallbackTimestamp != null && fallbackTimestamp > 0L) {
+        "Bill ${sdf.format(Date(fallbackTimestamp))}"
+    } else {
+        "Date unavailable"
     }
-    return "Due Soon"
 }
 
-fun calculateDaysRemainingText(rawSms: String): String {
-    val cal = parseDueDate(rawSms) ?: return "Reminder"
-    val today = Calendar.getInstance()
-    val diffMillis = cal.timeInMillis - today.timeInMillis
-    val diffDays = (diffMillis / (1000 * 60 * 60 * 24)).toInt()
-    return when {
-        diffDays < 0 -> "Overdue"
-        diffDays == 0 -> "Due today"
-        diffDays == 1 -> "1 day to go"
-        else -> "$diffDays days to go"
+fun calculateDaysRemainingText(rawSms: String, fallbackTimestamp: Long? = null): String? {
+    val cal = parseDueDate(rawSms, fallbackTimestamp) ?: return null
+    val today = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
     }
+    val diffMillis = cal.timeInMillis - today.timeInMillis
+    val diffDays = kotlin.math.round(diffMillis / 86_400_000.0).toInt()
+    return when {
+        diffDays < 0 -> "Overdue ${-diffDays}d"
+        diffDays == 0 -> "Due today"
+        diffDays == 1 -> "Tomorrow"
+        else -> "In ${diffDays}d"
+    }
+}
+
+fun buildReminderDisplayInfo(due: TransactionSMS, isPastSection: Boolean = false): ReminderDisplayInfo {
+    val combinedSource = "${due.accountIdentifier} ${due.beneficiary} ${due.sender} ${due.rawSms}"
+    val lowerSource = combinedSource.lowercase(Locale.US)
+    val lowerBen = due.beneficiary.lowercase(Locale.US)
+    val lowerAcc = due.accountIdentifier.lowercase(Locale.US)
+    val lowerSms = due.rawSms.lowercase(Locale.US)
+
+    val (bankOrBillerName, brandColor) = when {
+        lowerAcc.contains("yes") || lowerBen.contains("yes") || lowerSms.contains("yes bank") || lowerSms.contains("yesbank") ->
+            "YES Bank" to Color(0xFFC2D9E8)
+        lowerAcc.contains("icici") || lowerBen.contains("icici") || lowerSms.contains("icici") ->
+            "ICICI Bank" to Color(0xFFF2B8B8)
+        lowerAcc.contains("hdfc") || lowerBen.contains("hdfc") || lowerSms.contains("hdfc") ->
+            "HDFC Bank" to Color(0xFFB8C9DE)
+        lowerAcc.contains("axis") || lowerBen.contains("axis") || lowerSms.contains("axis bank") ->
+            "Axis Bank" to Color(0xFFF2B8C2)
+        lowerAcc.contains("sbi") || lowerBen.contains("sbi") || lowerSms.contains("sbi ") ->
+            "SBI" to Color(0xFFBBDEFB)
+        lowerAcc.contains("kotak") || lowerBen.contains("kotak") || lowerSms.contains("kotak") ->
+            "Kotak Bank" to Color(0xFFF8BBD0)
+        lowerAcc.contains("hsbc") || lowerBen.contains("hsbc") || lowerSms.contains("hsbc") ->
+            "HSBC" to Color(0xFFF0B8B8)
+        lowerAcc.contains("idfc") || lowerBen.contains("idfc") || lowerSms.contains("idfc") ->
+            "IDFC First" to Color(0xFFFFCDD2)
+        lowerAcc.contains("indusind") || lowerBen.contains("indusind") || lowerSms.contains("indusind") ->
+            "IndusInd Bank" to Color(0xFFFFE0B2)
+        lowerAcc.contains("amex") || lowerBen.contains("amex") || lowerSms.contains("amex") ->
+            "Amex" to Color(0xFFB2DFDB)
+        lowerAcc.contains("rbl") || lowerBen.contains("rbl") || lowerSms.contains("rbl") ->
+            "RBL Bank" to Color(0xFFC5CAE9)
+        lowerAcc.contains("citi") || lowerBen.contains("citi") || lowerSms.contains("citibank") ->
+            "Citibank" to Color(0xFFB3E5FC)
+        lowerAcc.contains("federal") || lowerBen.contains("federal") || lowerSms.contains("federal bank") ->
+            "Federal Bank" to Color(0xFFFFECB3)
+        lowerBen.contains("jiohome") || lowerSms.contains("jiohome") || lowerSms.contains("jio home") ->
+            "JioHome" to Color(0xFFD1C4E9)
+        lowerBen.contains("jio") ->
+            "Jio" to Color(0xFFD1C4E9)
+        lowerBen.contains("airtel") ->
+            "Airtel" to Color(0xFFFFCDD2)
+        lowerBen.contains("tata play") ->
+            "Tata Play" to Color(0xFFE1BEE7)
+        lowerBen.contains("bescom") || lowerBen.contains("electricity") ->
+            "Electricity" to Color(0xFFFFF9C4)
+        lowerBen.contains("lic") ->
+            "LIC" to Color(0xFFB2EBF2)
+        else -> {
+            val cleaned = formatYesBankBeneficiary(due.beneficiary)
+                .takeIf { it.isNotBlank() && !it.equals("Unknown Beneficiary", ignoreCase = true) }
+                ?: due.sender.replace(Regex("(?i)^[A-Z]{2}-"), "").ifBlank { "Bill" }
+            cleaned to Color(0xFFC2D9E8)
+        }
+    }
+
+    // Extract last 3-6 digits avoiding years
+    val digitsRegex = Regex("(?:XX|X|\\*|A/c|Acc|Account|Card|No\\.?)?\\s*(\\d{3,6})\\b", RegexOption.IGNORE_CASE)
+    val rawDigitCandidate = digitsRegex.findAll("${due.accountIdentifier} ${due.beneficiary}")
+        .map { it.groupValues[1] }
+        .firstOrNull { it != "0000" && it != "2024" && it != "2025" && it != "2026" }
+    val digits = rawDigitCandidate?.takeLast(4)
+
+    val isLoanOrEmi = lowerSource.contains("personal loan") || lowerSource.contains("loan") || lowerSource.contains("emi")
+    val isCreditCard = lowerSource.contains("credit card") || lowerSource.contains("card")
+    val isUtility = lowerBen.contains("jio") || lowerBen.contains("airtel") || lowerBen.contains("vi") ||
+        lowerBen.contains("bsnl") || lowerBen.contains("tata") || lowerBen.contains("electricity") || lowerBen.contains("lic")
+
+    val accountDetail: String? = when {
+        isLoanOrEmi && digits != null -> "Loan EMI ••$digits"
+        isLoanOrEmi -> "Loan EMI"
+        isCreditCard && digits != null -> "Credit Card ••$digits"
+        isCreditCard -> "Credit Card"
+        digits != null -> "A/c ••$digits"
+        isUtility && (lowerSms.contains("broadband") || lowerSms.contains("fiber") || lowerSms.contains("fixedvoice") || lowerBen.contains("jiohome")) ->
+            "Broadband Bill"
+        isUtility -> "Utility Bill"
+        due.category.isNotBlank() && !due.category.equals("Other", ignoreCase = true) && !due.category.equals(bankOrBillerName, ignoreCase = true) ->
+            due.category
+        else -> null
+    }
+
+    val iconVector = when {
+        isCreditCard -> Icons.Default.CreditCard
+        isLoanOrEmi -> Icons.Default.AccountBalance
+        lowerBen.contains("jiohome") || lowerSms.contains("broadband") || lowerSms.contains("fiber") -> Icons.Default.Wifi
+        isUtility -> Icons.AutoMirrored.Filled.ReceiptLong
+        else -> Icons.Default.AccountBalance
+    }
+
+    // Extract optional Min Due amount if strictly less than total due
+    val minDueMatcher = java.util.regex.Pattern.compile(
+        "(?i)min(?:imum)?\\s+due\\s*(?:is|:)?\\s*(?:Rs\\.?|INR|USD|₹)?\\s*([0-9,]+(?:\\.[0-9]{1,2})?)"
+    ).matcher(due.rawSms)
+    val minDueAmount = if (minDueMatcher.find()) {
+        minDueMatcher.group(1)?.replace(",", "")?.toDoubleOrNull()
+    } else null
+    val minDueText = if (minDueAmount != null && minDueAmount > 0.0 && minDueAmount < due.amount) {
+        String.format(Locale.getDefault(), "Min ₹%,.0f", minDueAmount)
+    } else null
+
+    val parsedCal = parseDueDate(due.rawSms, due.timestamp)
+    val sdf = java.text.SimpleDateFormat("dd MMM yy", Locale.US)
+    val dueDateText = if (parsedCal != null) {
+        "Due ${sdf.format(parsedCal.time)}"
+    } else {
+        "Bill ${sdf.format(Date(due.timestamp))}"
+    }
+
+    val today = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+
+    val (statusBadge, urgency) = if (due.isCompleted) {
+        "Paid" to ReminderUrgency.PAID
+    } else if (parsedCal != null) {
+        val diffDays = kotlin.math.round((parsedCal.timeInMillis - today.timeInMillis) / 86_400_000.0).toInt()
+        when {
+            diffDays < 0 -> (if (isPastSection) "Overdue" else "Overdue ${-diffDays}d") to ReminderUrgency.OVERDUE
+            diffDays == 0 -> "Due today" to ReminderUrgency.TODAY
+            diffDays == 1 -> "Tomorrow" to ReminderUrgency.SOON
+            diffDays in 2..5 -> "In ${diffDays}d" to ReminderUrgency.SOON
+            else -> "In ${diffDays}d" to ReminderUrgency.UPCOMING
+        }
+    } else if (isPastSection) {
+        "Unpaid" to ReminderUrgency.OVERDUE
+    } else {
+        null to ReminderUrgency.UPCOMING
+    }
+
+    return ReminderDisplayInfo(
+        bankOrBillerName = bankOrBillerName,
+        accountDetail = accountDetail,
+        dueDateText = dueDateText,
+        statusBadge = statusBadge,
+        minDueText = minDueText,
+        urgency = urgency,
+        brandAccentColor = brandColor,
+        iconVector = iconVector
+    )
 }
 
 @Composable
-fun ReminderItemCard(
-    title: String,
-    subtitle: String = "Reminder Alert",
+fun BillReminderCard(
+    info: ReminderDisplayInfo,
     amountText: String,
-    isCompleted: Boolean = false,
-    onToggleCompleted: (() -> Unit)? = null,
+    isCompleted: Boolean,
+    onActionClick: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val cardBg = MaterialTheme.colorScheme.surface
-    val cardBorder = MaterialTheme.colorScheme.outline
-    val alertColor = MaterialTheme.colorScheme.error
-    val mutedText = MaterialTheme.colorScheme.onSurfaceVariant
-    val titleColor = MaterialTheme.colorScheme.onSurface
+    val paidGreen = Color(0xFF2E7D32)
+    val urgencyColor = when (info.urgency) {
+        ReminderUrgency.OVERDUE -> MaterialTheme.colorScheme.error
+        ReminderUrgency.TODAY -> Color(0xFFD97706)
+        ReminderUrgency.SOON -> Color(0xFFD97706)
+        ReminderUrgency.UPCOMING -> MaterialTheme.colorScheme.primary
+        ReminderUrgency.PAID -> paidGreen
+    }
 
     Card(
         modifier = modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = cardBg),
-        border = BorderStroke(1.dp, cardBorder)
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .height(IntrinsicSize.Min),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Subtle urgency indicator bar on the left edge
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(urgencyColor)
+            )
+
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (onToggleCompleted != null) {
-                    IconButton(
-                        onClick = onToggleCompleted,
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isCompleted) Icons.AutoMirrored.Filled.Undo else Icons.Outlined.CheckCircle,
-                            contentDescription = if (isCompleted) "Mark active" else "Mark completed",
-                            tint = if (isCompleted) mutedText else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
+                // Brand Badge Icon
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isCompleted) MaterialTheme.colorScheme.surfaceVariant
+                            else info.brandAccentColor
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = info.iconVector,
+                        contentDescription = info.bankOrBillerName,
+                        tint = if (isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFF1C2024),
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
 
-                Column(modifier = Modifier.weight(1f)) {
+                Spacer(modifier = Modifier.width(12.dp))
+
+                // Middle Info Column: Bank Name, Non-Redundant Instrument Detail, Due Date + Status Pill
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
                     Text(
-                        text = title,
-                        style = MaterialTheme.typography.bodyLarge.copy(
+                        text = info.bankOrBillerName,
+                        style = MaterialTheme.typography.titleSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
+                            fontSize = 15.sp,
                             textDecoration = if (isCompleted) TextDecoration.LineThrough else TextDecoration.None
                         ),
-                        color = if (isCompleted) mutedText else titleColor,
+                        color = if (isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        color = if (isCompleted) mutedText else alertColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+
+                    if (!info.accountDetail.isNullOrBlank()) {
+                        Text(
+                            text = info.accountDetail,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CalendarToday,
+                                contentDescription = null,
+                                tint = if (isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else urgencyColor,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = info.dueDateText,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp
+                                ),
+                                color = if (isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                        }
+
+                        if (!info.statusBadge.isNullOrBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = urgencyColor.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = info.statusBadge,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp
+                                    ),
+                                    color = urgencyColor,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = amountText,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        textDecoration = if (isCompleted) TextDecoration.LineThrough else TextDecoration.None
-                    ),
-                    color = if (isCompleted) mutedText else alertColor
-                )
-                if (!isCompleted) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Icon(
-                        imageVector = Icons.Default.Notifications,
-                        contentDescription = "Alert",
-                        tint = alertColor,
-                        modifier = Modifier.size(12.dp)
-                    )
+                // Right Column: Amount + Min Due (if any) + Mark Paid Check Button
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = amountText,
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                textDecoration = if (isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                            ),
+                            color = if (isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                        )
+                        if (!info.minDueText.isNullOrBlank() && !isCompleted) {
+                            Text(
+                                text = info.minDueText,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    if (onActionClick != null) {
+                        IconButton(
+                            onClick = onActionClick,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("reminder_toggle_button")
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .border(
+                                        BorderStroke(
+                                            1.5.dp,
+                                            if (isCompleted) paidGreen else paidGreen.copy(alpha = 0.65f)
+                                        ),
+                                        CircleShape
+                                    )
+                                    .background(
+                                        if (isCompleted) paidGreen else paidGreen.copy(alpha = 0.10f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = if (isCompleted) "Mark unpaid" else "Mark paid",
+                                    tint = if (isCompleted) Color.White else paidGreen,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
